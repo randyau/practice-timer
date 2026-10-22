@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PracticeTimer.Core\PracticeTimer.Core.csproj" />
+    <Compile Include="..\..\tests\PracticeTimer.Core.Tests\Support\WavReader.cs" Link="WavReader.cs" />
+    <Compile Include="..\..\tests\PracticeTimer.Core.Tests\Support\FakeClock.cs" Link="FakeClock.cs" />
+    <Compile Include="..\..\tests\PracticeTimer.Core.Tests\Support\ReplayRunner.cs" Link="ReplayRunner.cs" />
+  </ItemGroup>
+</Project>

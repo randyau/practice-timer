@@ -112,7 +112,7 @@ public sealed class LoudnessDetector : IActivityDetector
         else if (closed is { Sustained: false })
         {
             var matched = Bank.Match(closed.Spectrum, closed.PeakDb) != null;
-            var periodic = Periodicity.Observe(closed.Onset);
+            var periodic = Periodicity.Observe(closed.Onset, closed.Spectrum);
             metronome = matched || periodic;
             if (closed.GapBefore >= CleanGap) { _pendingClean = closed; _pendingMatched = matched; }
             if (!metronome)

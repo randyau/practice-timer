@@ -2,7 +2,10 @@ using PracticeTimer.Core.Analysis;
 
 namespace PracticeTimer.Core.Detection;
 
-/// <summary>A run of loud frames. <see cref="Duration"/> spans onset to the end of the last loud frame.</summary>
+/// <summary>
+/// A run of loud frames. <see cref="Duration"/> spans onset to the end of the last loud frame. <see cref="Sustained"/> says
+/// the level was held near its peak for longer than a tick or a pluck lasts, which a ringing click or a clap is not.
+/// </summary>
 public sealed record Burst(TimeSpan Onset, TimeSpan Duration, double PeakDb, double[] Spectrum, TimeSpan GapBefore, bool Sustained)
 {
     public TimeSpan End => Onset + Duration;
@@ -13,11 +16,13 @@ public sealed class BurstTracker
     private TimeSpan _shortMax;
     private readonly TimeSpan _closeGap;
     private bool _open;
-    private TimeSpan _onset, _lastLoudEnd, _prevEnd = TimeSpan.FromMinutes(-10), _gapBefore, _quiet;
+    private TimeSpan _onset, _lastLoudEnd, _heldEnd, _prevEnd = TimeSpan.FromMinutes(-10), _gapBefore, _quiet;
     private double _peak;
     private readonly List<float[]> _samples = new();
     private int _rate;
     private const int MaxFingerprintFrames = 8;
+    // A frame within this many dB of the burst's peak counts as held. A click rings down 10 dB in about 100 ms; a note stays up.
+    private const double HoldDb = 10;
 
     public BurstTracker(TimeSpan? shortMax = null, TimeSpan? closeGap = null)
     {
@@ -28,8 +33,9 @@ public sealed class BurstTracker
     /// <summary>Longest run of loud frames that still counts as a short burst (a tick, a pluck) rather than a held sound.</summary>
     public TimeSpan ShortMax { get => _shortMax; set => _shortMax = value; }
 
-    public TimeSpan OpenDuration => _open ? _lastLoudEnd - _onset : TimeSpan.Zero;
-    public bool IsSustained => _open && OpenDuration > _shortMax;
+    /// <summary>How long the open burst has stayed near its peak level.</summary>
+    public TimeSpan HeldDuration => _open ? _heldEnd - _onset : TimeSpan.Zero;
+    public bool IsSustained => _open && HeldDuration > _shortMax;
 
     /// <summary>Returns the burst that closed on this frame, if any.</summary>
     public Burst? Update(AudioFrame frame, bool loud, double dbfs)
@@ -47,6 +53,7 @@ public sealed class BurstTracker
             _lastLoudEnd = frame.End;
             _quiet = TimeSpan.Zero;
             _peak = Math.Max(_peak, dbfs);
+            if (dbfs >= _peak - HoldDb) _heldEnd = frame.End;
             _rate = frame.SampleRate;
             if (_samples.Count < MaxFingerprintFrames) _samples.Add(frame.Samples);
             return null;
@@ -57,7 +64,7 @@ public sealed class BurstTracker
         _open = false;
         _prevEnd = _lastLoudEnd;
         var dur = _lastLoudEnd - _onset;
-        return new Burst(_onset, dur, _peak, BandSpectrum.BurstFingerprint(Joined(), _rate), _gapBefore, dur > _shortMax);
+        return new Burst(_onset, dur, _peak, BandSpectrum.BurstFingerprint(Joined(), _rate), _gapBefore, _heldEnd - _onset > _shortMax);
     }
 
     private float[] Joined()

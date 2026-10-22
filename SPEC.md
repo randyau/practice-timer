@@ -48,9 +48,9 @@ Loudness-based (v1). Detection sits behind `IActivityDetector` (frame in, activi
 Goal: a metronome ticking alone (mechanical click or digital beep, ~30–250 BPM) must not start or sustain the clock. A metronome running while the student plays must not get in the way.
 
 Approach (rhythm and shape, not pitch):
-- **Burst shape.** Consecutive loud frames form a burst. A tick is a short burst (< 150 ms) followed by a clear gap near the floor. Music and speech produce longer or denser energy.
+- **Burst shape.** Consecutive loud frames form a burst. A tick is a burst whose level is **held** near its peak (within 10 dB) for less than 150 ms, followed by a clear gap near the floor. A click or clap that rings down for a few hundred milliseconds is still a tick; a note that stays up is not. Music and speech produce longer or denser energy.
 - **Duty cycle.** Over a sliding 2.5 s window, the fraction of time that is loud from short unmatched bursts. Ticks alone give a few percent; playing gives far more. Only a window above the duty threshold (default 20%, tunable) counts as active.
-- **Periodicity.** At least 4 consecutive short bursts with near-constant intervals (±12%, 0.24–2 s) are flagged as a **metronome pattern** and excluded from the active signal. The tracker follows tempo changes with a short moving window and keeps ignoring bursts on the grid for 3 s after the pattern is lost, so a missed beat doesn't leak through. The current BPM is shown, and clears when the pulse stops.
+- **Periodicity.** At least 4 consecutive short bursts with near-constant intervals (±12%, 0.24–2 s) that also sound alike (spectral cosine ≥ 0.95 between neighbours, ≥ 0.90 to follow a locked pulse) are flagged as a **metronome pattern** and excluded from the active signal. The tracker follows tempo changes with a short moving window and keeps ignoring bursts on the grid for 3 s after the pattern is lost, so a missed beat doesn't leak through. The current BPM is shown, and clears when the pulse stops.
 - **Playing over it.** Sustained energy on top of the ticks raises the duty cycle and the window becomes active. Ticks while the student rests do not hold the clock open: the stop delay is measured against non-metronome activity only.
 - A **Metronome filter** checkbox (on by default) disables all of this. The level meter shows metronome-flagged frames in a different colour so tuning is easy to see.
 
@@ -146,9 +146,9 @@ Defaults live in code; "User" means adjustable in the UI.
 | Hysteresis | 3 dB | no | `LoudnessGate` |
 | Start / stop delay | 1 s / 5 s | yes | `PracticeClock` |
 | Detector hangover | 500 ms | no | `DetectorSettings` |
-| Short-burst limit / close gap | 150 ms / 50 ms | no | `BurstTracker` |
+| Short-burst (held-level) limit / hold window / close gap | 150 ms / 10 dB / 50 ms | no | `BurstTracker` |
 | Duty window / threshold | 2.5 s / 20% | threshold only | `DetectorSettings` |
-| Periodicity: ticks / tolerance / range / hold | 4 / ±12% / 0.24–2 s / 3 s | no | `PeriodicityTracker` |
+| Periodicity: ticks / tolerance / range / hold / spectral similarity (lock, follow) | 4 / ±12% / 0.24–2 s / 3 s / 0.95, 0.90 | no | `PeriodicityTracker` |
 | Clean gap | 80 ms | no | `LoudnessDetector` |
 | Steady-noise rule | 30 s run, ≤ 6 dB over 10 s | no | `LoudnessDetector` |
 | Fingerprint | 24 bands, 100 Hz–7.5 kHz | no | `BandSpectrum` |
@@ -168,7 +168,7 @@ Defaults live in code; "User" means adjustable in the UI.
 - The Settings > Window tab states this in the UI. No network access. No account.
 
 ## Known deviations and limits
-- **Short regular notes look like a metronome.** Staccato or pizzicato under ~150 ms at a very steady tempo is treated as ticks (and can even be auto-learned as a tentative metronome). Long or ringing notes are not. The Metronome filter checkbox is the escape hatch; a test pins this behaviour.
+- **Short regular notes look like a metronome.** Staccato or pizzicato held under ~150 ms at a very steady tempo and with a near-identical sound is treated as ticks (and can even be auto-learned as a tentative metronome). Long or ringing notes are not. The Metronome filter checkbox is the escape hatch; a test pins this behaviour.
 - **A loud mechanical metronome** next to the mic raises the noise floor margin slightly.
 - **Steady loud sustained sound** (a drone held 30 s with < 6 dB variation) is eventually treated as room noise.
 - **`IActivityDetector` is not fully respected:** the pipeline also reads `LoudnessDetector`'s floor, periodicity and learning hooks.
@@ -199,11 +199,14 @@ src/PracticeTimer/           WPF app
   Platform/    MicCapture, MicWatcher, TrayIcon
   ViewModels/  MainViewModel
   Views/       MainWindow, SettingsWindow, HistoryWindow, LevelMeter, ProgressRing, Dialogs
-tests/PracticeTimer.Core.Tests/   xUnit, synthetic audio (Signals/SignalGen.cs)
+tests/PracticeTimer.Core.Tests/   xUnit; synthetic audio (Signals/SignalGen.cs) and recordings (Fixtures/*.wav)
+  Support/     WavReader, ReplayRunner (a recording through the real pipeline), Harness
+tools/Replay/                    console tool: replay a .wav and print what the detector decided
 ```
 
 ## Testing
 - **Automated (Core, runs on Linux):** the clock state machine (manual and auto, including backwards time, interrupts, trailing-quiet rollback, goal); the detector and noise floor (synthetic silence, tones, bursts, gaps either side of the stop delay, steady noise, varied-level calibration); click trains at several BPMs and 50 ms beeps; metronome learning (guided and auto, tempo steps, accelerando, restart at a new tempo, tick/tock, accent, two metronomes, off/on, level change, disabled/blank edits, locked profiles untouched by auto-learn, band-layout mismatch); bank concurrency; persistence (round trip, corrupt, newer/older version, locked file, unusable entries, envelope-key collisions, sanitising, failed writes); history aggregation and CSV.
+- **Recordings.** `Fixtures/metronome.wav` (a phone metronome app at 60 BPM, a clicking sound that rings for a few hundred milliseconds) and `Fixtures/claps.wav` (irregular hand claps standing in for music) are replayed through the real pipeline at their own 48 kHz. Tests pin that the metronome is learned at 60 BPM, is not credited with or without being learned, and that claps, alone or laid over the metronome, are credited. `tools/Replay` shows the same runs: `dotnet run --project tools/Replay -- tests/PracticeTimer.Core.Tests/Fixtures/claps.wav --auto [--bank <metronome.wav>] [--learn-at s] [--ticks] [--rows]`. New recordings (an instrument, a different metronome, a noisy room) go in `Fixtures/` with a test beside these.
 - **Manual checklist (Windows):** device switching, unplug during a run, sleep and resume, noisy room, a quiet instrument (soft violin), speech nearby, two copies launched, locked data file, dark theme, mixed-DPI monitors, start minimized with and without the tray.
 - The WPF layer is compiled in CI-style builds but has no automated UI tests.
 

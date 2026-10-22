@@ -49,10 +49,10 @@ public class BurstTrackerTests
     }
 
     [Fact]
-    public void LongBurstIsSustainedAndOpenDurationExposed()
+    public void LongBurstIsSustainedAndHeldDurationExposed()
     {
         Frames(10, true);
-        Assert.True(_t.OpenDuration > TimeSpan.FromMilliseconds(150));
+        Assert.True(_t.HeldDuration > TimeSpan.FromMilliseconds(150));
         Assert.True(_t.IsSustained);
         Frames(3, false);
         Assert.True(Assert.Single(_closed).Sustained);
