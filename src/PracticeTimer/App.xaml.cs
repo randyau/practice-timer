@@ -109,9 +109,14 @@ public partial class App : Application
     {
         var dark = IsDark(theme);
         var r = Current.Resources;
-        // Recolour the existing brushes rather than replacing them, so every user of a brush updates whichever way it was bound.
-        void Set(string key, string light, string darkHex) =>
-            ((SolidColorBrush)r[key]).Color = (Color)ColorConverter.ConvertFromString(dark ? darkHex : light);
+        // Brushes defined in XAML are frozen in a published build, so they are replaced, not recoloured.
+        // Every user of them binds with DynamicResource and picks up the new one.
+        void Set(string key, string light, string darkHex)
+        {
+            var brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(dark ? darkHex : light));
+            brush.Freeze();
+            r[key] = brush;
+        }
         Set("Bg", "#F6F7F9", "#14171C");
         Set("Panel", "#FFFFFF", "#1F242C");
         Set("Fg", "#1B1F24", "#ECEFF4");
@@ -119,5 +124,11 @@ public partial class App : Application
         Set("Accent", "#2563EB", "#4C8DFF");
         Set("Border", "#D0D5DD", "#3A424E");
         Set("Hover", "#E8EEFB", "#2B3340");
+        // Re-bind the windows explicitly so none can keep a brush from before the switch.
+        foreach (Window w in Current.Windows)
+        {
+            w.SetResourceReference(Control.BackgroundProperty, "Bg");
+            w.SetResourceReference(Control.ForegroundProperty, "Fg");
+        }
     }
 }
