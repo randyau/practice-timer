@@ -168,7 +168,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     {
         var previous = _selectedDevice;
         List<MicDevice> list;
-        try { list = MicCapture.List(); } catch (Exception) { list = new(); }
+        try { list = MicCapture.List(); } catch (Exception ex) { App.Log(ex); list = new(); }
         // Diff rather than rebuild: clearing the list makes the combo box drop its selection.
         foreach (var gone in Devices.Where(d => list.All(n => n.Id != d.Id)).ToList()) Devices.Remove(gone);
         foreach (var added in list.Where(n => Devices.All(d => d.Id != n.Id))) Devices.Add(added);
