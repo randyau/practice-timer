@@ -40,16 +40,69 @@ public class JsonStoreTests : TempDirTest
     }
 
     [Theory]
-    [InlineData("not json at all")]
-    [InlineData("{\"version\": 99, \"data\": {}}")]
-    public void CorruptOrUnknownVersionIsBackedUpAndIgnored(string content)
+    [InlineData("not json at all", "a.corrupt-*.json")]
+    [InlineData("{\"version\": 1, \"data\": 5}", "a.corrupt-*.json")]
+    [InlineData("{\"version\": 99, \"data\": {}}", "a.newer-v99-*.json")]
+    public void CorruptOrNewerVersionIsBackedUpAndIgnored(string content, string backup)
     {
         var path = Path.Combine(Dir, "a.json");
         File.WriteAllText(path, content);
         var d = new JsonStore<Doc>(path).Load();
         Assert.Equal("x", d.Name);
         Assert.False(File.Exists(path));
-        Assert.Single(Directory.GetFiles(Dir, "a.corrupt-*.json"));
+        Assert.Single(Directory.GetFiles(Dir, backup));
+    }
+
+    [Fact]
+    public void OlderVersionIsMigratedWhenAMigratorIsGiven()
+    {
+        var path = Path.Combine(Dir, "a.json");
+        File.WriteAllText(path, "{\"version\": 1, \"data\": {\"Old\": \"carried\"}}");
+        var d = new JsonStore<Doc>(path, 2, (v, el) => new Doc { Name = el.GetProperty("Old").GetString()! + v }).Load();
+        Assert.Equal("carried1", d.Name);
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public void OlderVersionWithoutMigratorIsReadAsIs()
+    {
+        var path = Path.Combine(Dir, "a.json");
+        File.WriteAllText(path, "{\"version\": 1, \"data\": {\"Name\": \"kept\"}}");
+        Assert.Equal("kept", new JsonStore<Doc>(path, 2).Load().Name);
+    }
+
+    [Fact]
+    public void UserTextEqualToEnvelopeKeysIsNotRewritten()
+    {
+        var path = Path.Combine(Dir, "a.json");
+        var s = new JsonStore<Doc>(path);
+        s.Save(new Doc { Name = "Data", Items = { 1 } });
+        Assert.Equal("Data", s.Load().Name);
+        s.Save(new Doc { Name = "Version" });
+        Assert.Equal("Version", s.Load().Name);
+    }
+
+    [Fact]
+    public void LockedFileIsNeitherMovedNorTreatedAsCorrupt()
+    {
+        var path = Path.Combine(Dir, "a.json");
+        File.WriteAllText(path, "{\"version\": 1, \"data\": {\"Name\": \"mine\"}}");
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            Assert.Equal("x", new JsonStore<Doc>(path).Load().Name);
+            Assert.True(File.Exists(path));
+        }
+        Assert.Equal("mine", new JsonStore<Doc>(path).Load().Name);
+    }
+
+    [Fact]
+    public void ReplacingAnExistingFileKeepsItReadable()
+    {
+        var path = Path.Combine(Dir, "a.json");
+        var s = new JsonStore<Doc>(path);
+        for (var i = 0; i < 5; i++) s.Save(new Doc { Name = "n" + i });
+        Assert.Equal("n4", s.Load().Name);
+        Assert.Equal(new[] { path }, Directory.GetFiles(Dir));
     }
 }
 
@@ -181,5 +234,58 @@ public class HistoryTests : TempDirTest
         var lines = csv.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.TrimEnd('\r')).ToArray();
         Assert.Equal("Date,Start,DurationSeconds,Duration,Mode,Instrument,Note", lines[0]);
         Assert.Equal("2026-10-05,09:30:15,125,00:02:05,Auto,violin,\"hard, \"\"fast\"\" bit\"", lines[1]);
+    }
+
+    [Fact]
+    public void CsvDurationDoesNotWrapPastADayAndFormulasAreDefused()
+    {
+        var csv = HistoryCsvWriter.Write(new[] { S("2026-10-05 09:30:15", 26 * 3600 + 61, "=SUM(A1)", "-2+3") });
+        var line = csv.Split("\r\n")[1];
+        Assert.Contains(",26:01:01,", line);
+        Assert.EndsWith(",'=SUM(A1),'-2+3", line);
+    }
+
+    [Fact]
+    public void FailedSaveKeepsTheSessionInMemoryAndReportsIt()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "pt-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "h.json");
+        try
+        {
+            var h = new HistoryStore(path);
+            Exception? failure = null;
+            h.SaveFailed += e => failure = e;
+            Directory.CreateDirectory(path + ".tmp"); // a directory where the temp file goes: the write fails
+            h.Add(S("2026-10-05 09:00", 60));
+            Assert.NotNull(failure);
+            Assert.Single(h.Sessions);
+        }
+        finally { Directory.Delete(dir, true); }
+    }
+}
+
+public class SettingsSanitizeTests : TempDirTest
+{
+    [Fact]
+    public void DamagedValuesAreClampedOnLoad()
+    {
+        var path = Path.Combine(Dir, "s.json");
+        File.WriteAllText(path, "{\"version\":1,\"data\":{\"StopDelaySeconds\":-4,\"StartDelaySeconds\":1e999,\"GoalMinutes\":-3,\"Theme\":\"Neon\",\"Mode\":\"x\"}}");
+        var s = new SettingsStore(path).Load();
+        Assert.Equal(1, s.StopDelaySeconds);
+        Assert.True(double.IsFinite(s.StartDelaySeconds));
+        Assert.Equal(0, s.GoalMinutes);
+        Assert.Equal("System", s.Theme);
+        Assert.Equal("Auto", s.Mode);
+    }
+
+    [Fact]
+    public void NaNFallsBackToTheDefault()
+    {
+        var s = new AppSettings { StopDelaySeconds = double.NaN, MinTriggerDb = double.PositiveInfinity };
+        s.Sanitize();
+        Assert.Equal(5, s.StopDelaySeconds);
+        Assert.Equal(-55, s.MinTriggerDb);
     }
 }

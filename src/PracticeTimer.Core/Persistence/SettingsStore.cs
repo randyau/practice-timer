@@ -21,12 +21,36 @@ public sealed class AppSettings
     public string Theme { get; set; } = "System";
     public bool LargeText { get; set; }
     public string? LastInstrument { get; set; }
+
+    /// <summary>
+    /// Pulls every numeric value into a range the app can use, so a hand-edited or damaged file
+    /// (NaN, negative delays, absurd levels) can't crash startup or silence the detector.
+    /// </summary>
+    public void Sanitize()
+    {
+        StartDelaySeconds = Clamp(StartDelaySeconds, 0.2, 30, 1);
+        StopDelaySeconds = Clamp(StopDelaySeconds, 1, 600, 5);
+        SensitivityMarginDb = Clamp(SensitivityMarginDb, 4, 30, 12);
+        MinTriggerDb = Clamp(MinTriggerDb, -90, -10, -55);
+        DutyThreshold = Clamp(DutyThreshold, 0.02, 1, 0.20);
+        GoalMinutes = Math.Clamp(GoalMinutes, 0, 24 * 60);
+        if (Mode is not ("Auto" or "Manual")) Mode = "Auto";
+        if (Theme is not ("System" or "Light" or "Dark")) Theme = "System";
+    }
+
+    private static double Clamp(double v, double min, double max, double fallback) =>
+        double.IsFinite(v) ? Math.Clamp(v, min, max) : fallback;
 }
 
 public sealed class SettingsStore
 {
     private readonly JsonStore<AppSettings> _store;
     public SettingsStore(string path) => _store = new JsonStore<AppSettings>(path);
-    public AppSettings Load() => _store.Load();
+    public AppSettings Load()
+    {
+        var s = _store.Load();
+        s.Sanitize();
+        return s;
+    }
     public void Save(AppSettings s) => _store.Save(s);
 }

@@ -31,6 +31,9 @@ public sealed class HistoryStore
         _data = _store.Load();
     }
 
+    /// <summary>Raised when writing the file fails. The change stays in memory and the next successful save includes it.</summary>
+    public event Action<Exception>? SaveFailed;
+
     public IReadOnlyList<SessionRecord> Sessions => _data.Sessions;
     public IReadOnlyList<string> Instruments => _data.Instruments;
 
@@ -42,12 +45,18 @@ public sealed class HistoryStore
             _data.Instruments.RemoveAll(i => string.Equals(i, s.Instrument, StringComparison.OrdinalIgnoreCase));
             _data.Instruments.Insert(0, s.Instrument.Trim());
         }
-        _store.Save(_data);
+        TrySave();
     }
 
     public void Delete(Guid id)
     {
-        if (_data.Sessions.RemoveAll(s => s.Id == id) > 0) _store.Save(_data);
+        if (_data.Sessions.RemoveAll(s => s.Id == id) > 0) TrySave();
+    }
+
+    private void TrySave()
+    {
+        try { _store.Save(_data); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { SaveFailed?.Invoke(e); }
     }
 }
 
@@ -84,15 +93,24 @@ public static class HistoryCsvWriter
                 s.Start.ToString("yyyy-MM-dd", inv),
                 s.Start.ToString("HH:mm:ss", inv),
                 Math.Round(s.DurationSeconds).ToString(inv),
-                TimeSpan.FromSeconds(Math.Round(s.DurationSeconds)).ToString("hh\\:mm\\:ss", inv),
+                Hms(Math.Round(s.DurationSeconds)),
                 Quote(s.Mode), Quote(s.Instrument), Quote(s.Note))).Append("\r\n");
         }
         return sb.ToString();
     }
 
+    /// <summary>Total hours, not wrapped at 24, so a long session doesn't read as a short one.</summary>
+    private static string Hms(double seconds)
+    {
+        var t = TimeSpan.FromSeconds(seconds);
+        return $"{(long)t.TotalHours:00}:{t.Minutes:00}:{t.Seconds:00}";
+    }
+
     private static string Quote(string? v)
     {
         if (string.IsNullOrEmpty(v)) return "";
+        // A spreadsheet would run a cell that starts with these as a formula.
+        if (v[0] is '=' or '+' or '-' or '@' or '\t' or '\r') v = "'" + v;
         return v.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0 ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
     }
 }

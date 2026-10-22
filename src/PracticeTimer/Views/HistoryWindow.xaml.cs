@@ -46,6 +46,15 @@ public partial class HistoryWindow : Window
     private void Export_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new SaveFileDialog { Filter = "CSV file (*.csv)|*.csv", FileName = "practice-history.csv" };
-        if (dlg.ShowDialog(this) == true) File.WriteAllText(dlg.FileName, HistoryCsvWriter.Write(_history.Sessions));
+        if (dlg.ShowDialog(this) != true) return;
+        try
+        {
+            // BOM so Excel reads the file as UTF-8.
+            File.WriteAllText(dlg.FileName, HistoryCsvWriter.Write(_history.Sessions), new System.Text.UTF8Encoding(true));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, "Couldn't write the file (is it open in another program?):\n" + ex.Message, "Export", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 }
