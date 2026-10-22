@@ -36,8 +36,10 @@ public sealed class LoudnessDetector : IActivityDetector
         _gate.AbsoluteMinDb = _s.AbsoluteMinDb;
         var db = Dsp.Dbfs(frame.Samples);
         var loud = _gate.Process(db, Floor.Floor);
-        if (!loud) Floor.Add(db);
         var now = frame.End;
+        // The floor is frozen while the detector is active (including its hangover), so rests inside a phrase
+        // can't drag it down to the instrument's own decay.
+        if (!loud && now > _holdUntil) Floor.Add(db);
         Periodicity.Expire(now);
 
         if (!_s.MetronomeFilterEnabled) return Emit(now, db, loud, loud, false);

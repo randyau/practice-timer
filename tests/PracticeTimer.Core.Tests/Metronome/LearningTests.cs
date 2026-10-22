@@ -166,6 +166,19 @@ public class LearnedFilterTests
     }
 }
 
+public class NoiseFloorFreezeTests
+{
+    [Fact]
+    public void RestsInsideAPhraseDoNotPullTheFloorDown()
+    {
+        var h = new Harness();
+        var parts = new List<float[]> { Silence(6, noiseDb: -60) };
+        for (var i = 0; i < 12; i++) { parts.Add(Note(440, 1, -25)); parts.Add(Silence(0.3, noiseDb: -95, seed: i + 2)); }
+        h.Run(Concat(parts.ToArray()), addRoom: false);
+        Assert.InRange(h.Detector.Floor.Floor, -64, -56);
+    }
+}
+
 public class ReplayScenarioTests
 {
     private static FingerprintBank Learn(params Func<float[]>[] sounds)
