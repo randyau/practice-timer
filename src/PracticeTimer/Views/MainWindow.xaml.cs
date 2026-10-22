@@ -16,15 +16,30 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _vm;
         _vm.ConfirmSave = AskSave;
+        _vm.PromptMetronomeName = name => Dialogs.AskText(this, "Name this metronome", "Learned! Give it a name, or skip to keep the default.", name);
+        _vm.ChooseReplacement = saved =>
+        {
+            var pick = Dialogs.Pick(this, "Metronomes full",
+                "Four metronomes are already saved. Choose one to replace with the one you just taught, or skip to discard it.",
+                saved.Select(p => p.Name).ToList());
+            return pick is { } i ? saved[i] : null;
+        };
         Meter.ThresholdDragged += level => _vm.SetThresholdLevel(level);
         _vm.SettingsApplied += ApplyWindowSettings;
         _tray = new TrayIcon(Restore, Close);
         ApplyWindowSettings();
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnSystemPreferenceChanged;
+        Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        Application.Current.SessionEnding += OnSessionEnding;
         Loaded += (_, _) =>
         {
             _vm.Start();
-            if (_vm.Settings.StartMinimized) Hide();
+            if (_vm.Settings.StartMinimized)
+            {
+                // Hiding is only safe when the tray icon is there to bring the window back.
+                if (_vm.Settings.MinimizeToTray) Hide();
+                else WindowState = WindowState.Minimized;
+            }
         };
         _vm.PropertyChanged += (_, e) =>
         {
@@ -38,23 +53,40 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(() => App.ApplyTheme("System"));
     }
 
+    private void OnPowerModeChanged(object sender, Microsoft.Win32.PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == Microsoft.Win32.PowerModes.Suspend) Dispatcher.Invoke(_vm.OnSuspend);
+        else if (e.Mode == Microsoft.Win32.PowerModes.Resume) _vm.OnResume();
+    }
+
+    private void OnSessionEnding(object sender, SessionEndingCancelEventArgs e) => _vm.SaveOnExit();
+
     private void ApplyWindowSettings()
     {
         var s = _vm.Settings;
         App.ApplyTheme(s.Theme);
         Topmost = s.AlwaysOnTop;
-        Root.LayoutTransform = new ScaleTransform(s.LargeText ? 1.25 : 1, s.LargeText ? 1.25 : 1);
+        var scale = s.LargeText ? 1.25 : 1;
+        Root.LayoutTransform = new ScaleTransform(scale, scale);
+        // The content is scaled, so the window's minimum size must grow with it or the layout clips.
+        MinWidth = 460 * scale;
+        MinHeight = 560 * scale;
+        Width = Math.Max(Width, MinWidth);
+        Height = Math.Max(Height, MinHeight);
         _tray.Visible = s.MinimizeToTray;
+        // If the tray icon went away while the window is hidden, nothing could bring it back.
+        if (!s.MinimizeToTray && !IsVisible) Restore();
     }
 
     private bool? AskSave(TimeSpan elapsed)
     {
+        if (!IsVisible) Restore(); // a prompt owned by a hidden window is easy to miss
         var r = MessageBox.Show(this, $"Save this {elapsed:hh\\:mm\\:ss} session to history?", "Reset timer",
             MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         return r switch { MessageBoxResult.Yes => true, MessageBoxResult.No => false, _ => null };
     }
 
-    private void Restore()
+    public void Restore()
     {
         Show();
         WindowState = WindowState.Normal;
@@ -70,8 +102,10 @@ public partial class MainWindow : Window
     protected override void OnClosing(CancelEventArgs e)
     {
         base.OnClosing(e);
-        if (!_vm.Reset()) { e.Cancel = true; return; }
+        _vm.SaveOnExit(); // closing keeps the session; Reset is where the user chooses to discard
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
+        Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+        Application.Current.SessionEnding -= OnSessionEnding;
         _vm.Dispose();
         _tray.Dispose();
     }

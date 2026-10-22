@@ -26,11 +26,20 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     private readonly DetectorSettings _detector = new();
     private readonly SessionRecorder _recorder;
     private AudioPipeline? _pipeline;
+    /// <summary>The microphone can't be used right now.</summary>
     private string? _micError;
-    private string _learnMessage = "";
-    private DateTime _learnMessageUntil;
+    /// <summary>A microphone problem that already happened; stays visible until the user acts on the timer.</summary>
+    private string? _micNotice;
+    /// <summary>Short-lived message: learn results, save failures.</summary>
+    private string _flash = "";
+    private DateTime _flashUntil;
+    private DateTime _checkUntil;
     private bool _isAuto;
     private bool _goalAnnounced;
+    private bool _settingsDirty;
+    private DateTime _settingsDueAt;
+    private DateTime _todayAt = DateTime.MinValue;
+    private static readonly TimeSpan MicSilenceLimit = TimeSpan.FromSeconds(2.5);
 
     public MainViewModel()
     {
@@ -40,6 +49,8 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         _recorder = new SessionRecorder(History, () => DateTime.Now);
         _recorder.Attach(Clock);
         Bank.Load(_metronomeStore.Load());
+        Instruments = new ObservableCollection<string>(History.Instruments);
+        History.SaveFailed += e => Flash("Couldn't save history: " + e.Message, 15);
         Clock.GoalReached += () => Application.Current.Dispatcher.BeginInvoke(OnGoalReached);
         _isAuto = Settings.Mode != "Manual";
         Instrument = Settings.LastInstrument ?? "";
@@ -57,6 +68,10 @@ public sealed class MainViewModel : ObservableBase, IDisposable
 
     /// <summary>Asks whether to save a session; true = save, false = discard, null = cancel.</summary>
     public Func<TimeSpan, bool?>? ConfirmSave { get; set; }
+    /// <summary>Offers a default metronome name; returns the chosen name, or null to keep the default.</summary>
+    public Func<string, string?>? PromptMetronomeName { get; set; }
+    /// <summary>Called when all four slots are taken; returns the saved metronome to replace, or null to not save.</summary>
+    public Func<IReadOnlyList<MetronomeProfile>, MetronomeProfile?>? ChooseReplacement { get; set; }
     public event Action? SettingsApplied;
 
     // ----- bound state -----
@@ -80,11 +95,18 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     public double GoalProgress { get => _goalProgress; private set => Set(ref _goalProgress, value); }
     public FrameTag Tag { get => _tag; private set => Set(ref _tag, value); }
     public bool IsRunning { get => _running; private set { if (Set(ref _running, value)) Raise(nameof(StartPauseLabel)); } }
-    public bool IsLearning { get => _learning; private set => Set(ref _learning, value); }
+    public bool IsLearning { get => _learning; private set { if (Set(ref _learning, value)) Raise(nameof(LearnLabel)); } }
     public bool IsCalibrating { get => _calibrating; private set => Set(ref _calibrating, value); }
+    private double _learnProgress;
+    private bool _learnCheck, _canLearn;
+    public double LearnProgress { get => _learnProgress; private set => Set(ref _learnProgress, value); }
+    public bool LearnCheck { get => _learnCheck; private set => Set(ref _learnCheck, value); }
+    public bool CanLearn { get => _canLearn; private set => Set(ref _canLearn, value); }
+    public string LearnLabel => IsLearning ? "Cancel learning" : "Learn metronome";
     public string StartPauseLabel => IsRunning ? "Pause" : "Start";
     public string Instrument { get => _instrument; set => Set(ref _instrument, value); }
-    public string Note { get; set; } = "";
+    private string _note = "";
+    public string Note { get => _note; set => Set(ref _note, value); }
 
     public int GoalMinutes
     {
@@ -92,15 +114,17 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         set
         {
             value = Math.Clamp(value, 0, 24 * 60);
-            if (value == Settings.GoalMinutes) return;
-            Settings.GoalMinutes = value;
-            Clock.Goal = value > 0 ? TimeSpan.FromMinutes(value) : null;
-            _goalAnnounced = false;
-            _settingsStore.Save(Settings);
-            Raise();
+            if (value != Settings.GoalMinutes)
+            {
+                Settings.GoalMinutes = value;
+                Clock.Goal = value > 0 ? TimeSpan.FromMinutes(value) : null;
+                _goalAnnounced = false;
+                SaveSettingsSoon();
+            }
+            Raise(); // also re-shows the clamped value if the typed one was out of range
         }
     }
-    public IReadOnlyList<string> Instruments => History.Instruments;
+    public ObservableCollection<string> Instruments { get; }
 
     public bool IsAuto
     {
@@ -110,7 +134,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
             if (!Set(ref _isAuto, value)) return;
             Settings.Mode = value ? "Auto" : "Manual";
             if (IsRunning) Clock.Pause();
-            _settingsStore.Save(Settings);
+            SaveSettingsNow();
         }
     }
 
@@ -122,7 +146,8 @@ public sealed class MainViewModel : ObservableBase, IDisposable
             if (!Set(ref _selectedDevice, value) || value == null) return;
             Settings.DeviceId = value.Id;
             Settings.DeviceName = value.Name;
-            _settingsStore.Save(Settings);
+            _micNotice = null;
+            SaveSettingsNow();
             StartCapture();
         }
     }
@@ -136,34 +161,47 @@ public sealed class MainViewModel : ObservableBase, IDisposable
 
     public void RefreshDevices()
     {
-        var current = SelectedDevice?.Id ?? Settings.DeviceId;
+        var previous = _selectedDevice;
         List<MicDevice> list;
         try { list = MicCapture.List(); } catch (Exception) { list = new(); }
-        var same = list.Select(d => d.Id).SequenceEqual(Devices.Select(d => d.Id));
-        if (!same)
+        if (!list.Select(d => d.Id).SequenceEqual(Devices.Select(d => d.Id)))
         {
             Devices.Clear();
             foreach (var d in list) Devices.Add(d);
         }
-        var pick = Devices.FirstOrDefault(d => d.Id == current)
-                   ?? Devices.FirstOrDefault(d => d.Id == MicCapture.DefaultId())
-                   ?? Devices.FirstOrDefault();
-        if (pick?.Id != _selectedDevice?.Id || (_pipeline == null && pick != null))
+        MicDevice? Find(string? id) => id == null ? null : Devices.FirstOrDefault(d => d.Id == id);
+
+        var lost = previous != null && Find(previous.Id) == null;
+        if (lost && _pipeline != null) HandleMicLost($"{previous!.Name} was disconnected.");
+
+        // The remembered microphone wins whenever it is present, so the app returns to it after a fallback.
+        var pick = Find(Settings.DeviceId) ?? Find(previous?.Id) ?? Find(MicCapture.DefaultId()) ?? Devices.FirstOrDefault();
+        if (pick == null)
+        {
+            _capture.Stop();
+            _pipeline = null;
+            _micError = "No microphone found";
+            return;
+        }
+        if (pick.Id != previous?.Id || _pipeline == null)
         {
             _selectedDevice = pick;
             Raise(nameof(SelectedDevice));
-            if (pick != null) StartCapture();
+            StartCapture();
+            if (lost && _pipeline != null && _micNotice != null) _micNotice += $" Now listening with {pick.Name}. Press Start to continue.";
         }
-        if (pick == null) { _capture.Stop(); _pipeline = null; _micError = "No microphone found"; }
     }
 
     private void StartCapture()
     {
+        // Each pipeline numbers its audio from zero, so end any auto run before the old timeline goes away.
+        Clock.Interrupt();
+        _pipeline = null;
         try
         {
             var id = _selectedDevice!.Id;
             AudioPipeline? pipeline = null;
-            var rate = _capture.Start(id, (samples, r) => pipeline?.Push(samples));
+            var rate = _capture.Start(id, samples => pipeline?.Push(samples));
             pipeline = new AudioPipeline(rate, Clock, _detector, Bank) { AutoLearnEnabled = Settings.AutoLearnMetronome };
             pipeline.LearnFinished += s => Application.Current.Dispatcher.BeginInvoke(() => OnLearnFinished(s));
             _pipeline = pipeline;
@@ -171,19 +209,41 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         }
         catch (Exception ex)
         {
-            _pipeline = null;
             _micError = "Can't open microphone: " + ex.Message;
         }
     }
 
+    /// <summary>Pauses the timer, drops the dead pipeline and leaves a warning that stays until the user acts.</summary>
+    private void HandleMicLost(string reason)
+    {
+        var running = Clock.State is ClockState.ManualRunning or ClockState.Listening or ClockState.Playing or ClockState.PausedQuiet;
+        Clock.Interrupt();
+        if (running) Clock.Pause();
+        _capture.Stop();
+        _pipeline = null;
+        _micNotice = running ? reason + " The timer is paused." : reason;
+    }
+
     private void OnCaptureStopped(Exception? ex)
     {
-        if (ex == null) return;
-        if (IsRunning) Clock.Pause();
-        _pipeline = null;
-        _micError = "Microphone lost. Pick a microphone to continue.";
+        if (_pipeline == null) return;
+        HandleMicLost(ex == null ? "The microphone stopped." : "Microphone lost.");
         RefreshDevices();
     }
+
+    /// <summary>Called when the computer is about to sleep: audio and wall-clock time are unreliable across it.</summary>
+    public void OnSuspend()
+    {
+        if (Clock.State is not (ClockState.Stopped or ClockState.ManualPaused))
+        {
+            Clock.Interrupt();
+            Clock.Pause();
+            _micNotice = "The timer paused when the computer went to sleep. Press Start to continue.";
+        }
+    }
+
+    /// <summary>Called after resume; the capture device often needs reopening.</summary>
+    public void OnResume() => Application.Current.Dispatcher.BeginInvoke(RefreshDevices);
 
     public void ApplySettings()
     {
@@ -195,7 +255,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         Clock.StopDelay = TimeSpan.FromSeconds(Settings.StopDelaySeconds);
         Clock.Goal = Settings.GoalMinutes > 0 ? TimeSpan.FromMinutes(Settings.GoalMinutes) : null;
         if (_pipeline != null) _pipeline.AutoLearnEnabled = Settings.AutoLearnMetronome;
-        _settingsStore.Save(Settings);
+        SaveSettingsNow();
         Raise(nameof(GoalMinutes));
         SettingsApplied?.Invoke();
     }
@@ -203,7 +263,9 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     // ----- commands -----
     public void StartPause()
     {
+        _micNotice = null;
         if (IsRunning) { Clock.Pause(); return; }
+        if (_pipeline == null) RefreshDevices(); // retry a microphone that was lost or wouldn't open
         if (IsLearning) _pipeline?.CancelLearn();
         if (IsAuto) Clock.StartAuto(); else Clock.Start();
     }
@@ -227,14 +289,24 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     private void SaveSession()
     {
         Settings.LastInstrument = string.IsNullOrWhiteSpace(Instrument) ? null : Instrument.Trim();
-        _settingsStore.Save(Settings);
+        SaveSettingsNow();
         _recorder.Save(Clock, Instrument, Note);
-        Raise(nameof(Instruments));
+        // Insert only what is new: rebuilding the list would clear the editable instrument box.
+        foreach (var i in History.Instruments.Reverse())
+            if (!Instruments.Contains(i, StringComparer.OrdinalIgnoreCase)) Instruments.Insert(0, i);
+    }
+
+    /// <summary>Saves a session worth keeping and writes pending settings. For window close and logoff, where asking isn't possible.</summary>
+    public void SaveOnExit()
+    {
+        if (Clock.Elapsed.TotalSeconds >= 3) SaveSession();
+        FlushSettings();
     }
 
     public void LearnMetronome()
     {
-        if (_pipeline == null) return;
+        if (_pipeline == null || !CanLearn) return;
+        _micNotice = null;
         if (IsLearning) { _pipeline.CancelLearn(); return; }
         _pipeline.StartLearn();
     }
@@ -248,10 +320,14 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         Settings.MinTriggerDb = min;
         _detector.MarginDb = margin;
         _detector.AbsoluteMinDb = min;
-        _settingsStore.Save(Settings);
+        SaveSettingsSoon(); // fires on every mouse move while dragging
     }
 
-    public void Calibrate() => _pipeline?.StartCalibration();
+    public void Calibrate()
+    {
+        _micNotice = null;
+        _pipeline?.StartCalibration();
+    }
 
     public void ForgetAutoLearned()
     {
@@ -259,29 +335,46 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         SaveMetronomes();
     }
 
-    public void SaveMetronomes() => _metronomeStore.Save(Bank.Profiles);
+    public void SaveMetronomes() => TrySave(() => _metronomeStore.Save(Bank.Profiles), "metronomes");
 
     private void OnLearnFinished(GuidedLearnSession s)
     {
-        var message = s.Status switch
+        switch (s.Status)
         {
-            LearnStatus.Success => $"Metronome learned (BPM ~{s.Bpm:0})",
-            LearnStatus.AlreadyKnown => $"Already known: {s.Result?.Name}",
-            LearnStatus.Timeout => "Didn't hear a steady metronome. Try again.",
-            LearnStatus.TooMuchSound => "Too much other sound. Try again.",
-            LearnStatus.BankFull => "Four metronomes are already saved. Delete one in Settings first.",
-            _ => "",
-        };
-        if (s.Status is LearnStatus.Success && s.Result != null)
-        {
-            Bank.ApplyEdits(new[] { new ProfileEdit(s.Result.Id, NextMetronomeName(), true, false) });
-            Bank.SetMic(s.Result.Id, SelectedDevice?.Id, SelectedDevice?.Name);
-            SaveMetronomes();
+            case LearnStatus.Success when s.Result != null:
+                KeepLearned(s.Result.Id, s.Bpm);
+                break;
+            case LearnStatus.BankFull when s.Result != null:
+                var victim = ChooseReplacement?.Invoke(Bank.Profiles.Where(p => p.Locked).ToList());
+                if (victim != null)
+                {
+                    Bank.Remove(victim.Id);
+                    var add = Bank.TryAdd(s.Result);
+                    if (add.Kind != AddKind.Full) { KeepLearned(add.Profile.Id, s.Bpm); break; }
+                }
+                Flash("Four metronomes are already saved, so this one wasn't kept. Delete one in Settings first.", 10);
+                break;
+            case LearnStatus.AlreadyKnown:
+                SaveMetronomes();
+                System.Media.SystemSounds.Asterisk.Play();
+                Flash($"Already known: {s.Result?.Name}", 8);
+                break;
+            case LearnStatus.Timeout: Flash("Didn't hear a steady metronome. Try again.", 8); break;
+            case LearnStatus.TooMuchSound: Flash("Too much other sound. Try again.", 8); break;
         }
-        if (s.Status == LearnStatus.AlreadyKnown) SaveMetronomes();
-        if (s.Status is LearnStatus.Success or LearnStatus.AlreadyKnown) System.Media.SystemSounds.Asterisk.Play();
-        _learnMessage = message;
-        _learnMessageUntil = DateTime.Now.AddSeconds(8);
+    }
+
+    /// <summary>Names, stamps, saves and announces a freshly learned metronome.</summary>
+    private void KeepLearned(string id, double? bpm)
+    {
+        var name = NextMetronomeName();
+        name = PromptMetronomeName?.Invoke(name) ?? name;
+        Bank.ApplyEdits(new[] { new ProfileEdit(id, name, true, false) });
+        Bank.SetMic(id, SelectedDevice?.Id, SelectedDevice?.Name);
+        SaveMetronomes();
+        System.Media.SystemSounds.Asterisk.Play();
+        Flash($"Metronome learned (BPM ~{bpm:0})", 8);
+        _checkUntil = DateTime.Now.AddSeconds(8);
     }
 
     /// <summary>"Metronome N" with the lowest N not already used by a saved metronome.</summary>
@@ -291,6 +384,40 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         var n = 1;
         while (used.Contains($"Metronome {n}")) n++;
         return $"Metronome {n}";
+    }
+
+    private void Flash(string text, double seconds)
+    {
+        _flash = text;
+        _flashUntil = DateTime.Now.AddSeconds(seconds);
+    }
+
+    private bool TrySave(Action save, string what)
+    {
+        try { save(); return true; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Flash($"Couldn't save {what}: {e.Message}", 15);
+            return false;
+        }
+    }
+
+    private void SaveSettingsNow()
+    {
+        _settingsDirty = false;
+        TrySave(() => _settingsStore.Save(Settings), "settings");
+    }
+
+    /// <summary>For values that change continuously (a drag, typing): written shortly after the last change.</summary>
+    private void SaveSettingsSoon()
+    {
+        _settingsDirty = true;
+        _settingsDueAt = DateTime.Now.AddSeconds(1);
+    }
+
+    private void FlushSettings()
+    {
+        if (_settingsDirty) SaveSettingsNow();
     }
 
     private void OnGoalReached()
@@ -304,6 +431,12 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     private void Refresh()
     {
         Clock.Tick();
+        if (_settingsDirty && DateTime.Now >= _settingsDueAt) FlushSettings();
+        if (_pipeline != null && _capture.IsRunning && _capture.SilenceAge > MicSilenceLimit)
+        {
+            HandleMicLost("The microphone stopped sending audio.");
+            _micError = "Microphone not responding. Pick it again or press Start to retry.";
+        }
         var e = Clock.Elapsed;
         ElapsedText = $"{(int)e.TotalHours:00}:{e.Minutes:00}:{e.Seconds:00}";
         IsRunning = Clock.State is ClockState.ManualRunning or ClockState.Listening or ClockState.Playing or ClockState.PausedQuiet;
@@ -312,17 +445,21 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         var learn = _pipeline?.Learn;
         IsLearning = learn is { IsDone: false };
         IsCalibrating = snap.Calibrating;
+        LearnProgress = learn is { IsDone: false } ? Math.Min(1.0, (double)learn.TickCount / GuidedLearnSession.RequiredTicks) : 0;
+        LearnCheck = !IsLearning && DateTime.Now < _checkUntil;
+        CanLearn = _pipeline != null && Settings.MetronomeFilterEnabled && !IsCalibrating;
         Level = Scale(snap.Dbfs);
         Threshold = Scale(snap.ThresholdDb);
         Floor = Scale(snap.FloorDb);
         Tag = snap.Tag;
         TempoText = snap.Bpm is { } bpm ? $"Tempo ~{bpm:0} BPM" : "";
 
-        StatusText = _micError
+        var flash = DateTime.Now < _flashUntil && _flash != "" ? _flash : null;
+        StatusText = _micError ?? _micNotice
             ?? (IsCalibrating ? "Calibrating... stay quiet for a few seconds"
             : IsLearning ? $"Learning metronome... {learn!.TickCount}/{GuidedLearnSession.RequiredTicks} ticks. Let it run on its own."
-            : DateTime.Now < _learnMessageUntil && _learnMessage != "" ? _learnMessage
-            : Clock.State switch
+            : flash
+            ?? Clock.State switch
             {
                 ClockState.Stopped => "Stopped",
                 ClockState.ManualRunning => "Running",
@@ -332,10 +469,11 @@ public sealed class MainViewModel : ObservableBase, IDisposable
                 _ => "Paused (quiet)",
             });
 
-        var saved = Bank.Profiles.Count(p => p.Locked);
-        var other = Bank.Profiles.Count(p => p.Locked && MetronomeStore.LearnedOnDifferentMic(p, SelectedDevice?.Id));
-        MetronomeText = Bank.Profiles.Count == 0 ? "No metronome learned"
-            : $"Metronomes: {saved} saved" + (Bank.Profiles.Count > saved ? " + auto" : "") + (other > 0 ? $" ({other} learned on another mic)" : "");
+        var profiles = Bank.Profiles;
+        var saved = profiles.Count(p => p.Locked);
+        var other = profiles.Count(p => p.Locked && MetronomeStore.LearnedOnDifferentMic(p, SelectedDevice?.Id));
+        MetronomeText = profiles.Count == 0 ? "No metronome learned"
+            : $"Metronomes: {saved} saved" + (profiles.Count > saved ? " + Metronome (auto)" : "") + (other > 0 ? $" ({other} learned on another mic)" : "");
 
         if (Clock.Goal is { } goal)
         {
@@ -344,8 +482,12 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         }
         else { GoalProgress = 0; GoalText = "No goal set"; }
 
-        var today = HistoryAggregator.Today(History.Sessions, DateTime.Now);
-        TodayText = $"Saved today: {(int)today.TotalHours:00}:{today.Minutes:00}:{today.Seconds:00}";
+        if (DateTime.Now - _todayAt >= TimeSpan.FromSeconds(1))
+        {
+            _todayAt = DateTime.Now;
+            var today = HistoryAggregator.Today(History.Sessions, DateTime.Now);
+            TodayText = $"Saved today: {(int)today.TotalHours:00}:{today.Minutes:00}:{today.Seconds:00}";
+        }
     }
 
     private static double Scale(double db) => Math.Clamp((db + 80) / 80, 0, 1);
@@ -353,6 +495,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     public void Dispose()
     {
         _timer.Stop();
+        FlushSettings();
         _capture.Dispose();
         _watcher.Dispose();
     }

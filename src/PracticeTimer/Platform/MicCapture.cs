@@ -1,5 +1,6 @@
 using NAudio.CoreAudioApi;
 using NAudio.CoreAudioApi.Interfaces;
+using System.Runtime.InteropServices;
 using NAudio.Wave;
 
 namespace PracticeTimer.Platform;
@@ -9,15 +10,30 @@ public sealed record MicDevice(string Id, string Name)
     public override string ToString() => Name;
 }
 
+/// <summary>Receives one block of mono float samples. The span is only valid during the call.</summary>
+public delegate void SamplesHandler(ReadOnlySpan<float> mono);
+
 /// <summary>WASAPI capture that hands mono float samples at the device's own rate to a callback.</summary>
 public sealed class MicCapture : IDisposable
 {
+    private enum Sample { Float32, Float64, Pcm8, Pcm16, Pcm24, Pcm32 }
+
     private WasapiCapture? _capture;
     private MMDevice? _device;
-    private Action<float[], int>? _onSamples;
+    private SamplesHandler? _onSamples;
+    private float[] _mono = new float[4096];
+    private long _lastDataTimestamp;
 
     public int SampleRate { get; private set; }
+
+    /// <summary>Raised only when a capture ends on its own (device lost, driver error). Never for a deliberate Stop or restart.</summary>
     public event Action<Exception?>? Stopped;
+
+    public bool IsRunning => _capture != null;
+
+    /// <summary>How long since audio last arrived (or since capture started, before the first block). Zero when not capturing.</summary>
+    public TimeSpan SilenceAge => _capture == null ? TimeSpan.Zero
+        : TimeSpan.FromSeconds((double)(System.Diagnostics.Stopwatch.GetTimestamp() - Interlocked.Read(ref _lastDataTimestamp)) / System.Diagnostics.Stopwatch.Frequency);
 
     public static List<MicDevice> List()
     {
@@ -37,41 +53,98 @@ public sealed class MicCapture : IDisposable
     }
 
     /// <summary>Starts capturing; returns the device's sample rate.</summary>
-    public int Start(string deviceId, Action<float[], int> onSamples)
+    public int Start(string deviceId, SamplesHandler onSamples)
     {
         Stop();
         using var e = new MMDeviceEnumerator();
-        _device = e.GetDevice(deviceId);
-        _capture = new WasapiCapture(_device) { ShareMode = AudioClientShareMode.Shared };
-        var wf = _capture.WaveFormat is WaveFormatExtensible ext ? ext.ToStandardWaveFormat() : _capture.WaveFormat;
-        SampleRate = wf.SampleRate;
-        _onSamples = onSamples;
-        _capture.DataAvailable += (_, a) => Convert(a.Buffer, a.BytesRecorded, wf);
-        _capture.RecordingStopped += (_, a) => Stopped?.Invoke(a.Exception);
-        _capture.StartRecording();
-        return SampleRate;
+        MMDevice? device = null;
+        WasapiCapture? capture = null;
+        try
+        {
+            device = e.GetDevice(deviceId);
+            capture = new WasapiCapture(device) { ShareMode = AudioClientShareMode.Shared };
+            var wf = capture.WaveFormat is WaveFormatExtensible ext ? ext.ToStandardWaveFormat() : capture.WaveFormat;
+            var kind = KindOf(wf);
+            var channels = Math.Max(1, wf.Channels);
+            SampleRate = wf.SampleRate;
+            _onSamples = onSamples;
+            Interlocked.Exchange(ref _lastDataTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+            var mine = capture;
+            capture.DataAvailable += (_, a) => Convert(a.Buffer, a.BytesRecorded, kind, channels);
+            capture.RecordingStopped += (_, a) =>
+            {
+                // Stop() clears _capture first, so a capture we ended ourselves never reports.
+                if (ReferenceEquals(mine, _capture)) Stopped?.Invoke(a.Exception);
+            };
+            _device = device;
+            _capture = capture;
+            capture.StartRecording();
+            return SampleRate;
+        }
+        catch
+        {
+            _capture = null;
+            capture?.Dispose();
+            device?.Dispose();
+            _device = null;
+            throw;
+        }
     }
 
-    private void Convert(byte[] buf, int bytes, WaveFormat wf)
+    private static Sample KindOf(WaveFormat wf) => (wf.Encoding, wf.BitsPerSample) switch
     {
-        var ch = Math.Max(1, wf.Channels);
-        var bytesPer = wf.BitsPerSample / 8;
-        var frames = bytes / (bytesPer * ch);
-        var mono = new float[frames];
-        for (var i = 0; i < frames; i++)
+        (WaveFormatEncoding.IeeeFloat, 32) => Sample.Float32,
+        (WaveFormatEncoding.IeeeFloat, 64) => Sample.Float64,
+        (WaveFormatEncoding.Pcm, 8) => Sample.Pcm8,
+        (WaveFormatEncoding.Pcm, 16) => Sample.Pcm16,
+        (WaveFormatEncoding.Pcm, 24) => Sample.Pcm24,
+        (WaveFormatEncoding.Pcm, 32) => Sample.Pcm32,
+        _ => throw new NotSupportedException($"Unsupported microphone format: {wf.Encoding} {wf.BitsPerSample}-bit"),
+    };
+
+    private void Convert(byte[] buf, int bytes, Sample kind, int channels)
+    {
+        Interlocked.Exchange(ref _lastDataTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+        var bytesPer = kind switch { Sample.Pcm8 => 1, Sample.Pcm16 => 2, Sample.Pcm24 => 3, Sample.Float64 => 8, _ => 4 };
+        var frames = Math.Min(bytes, buf.Length) / (bytesPer * channels);
+        if (frames == 0) return;
+        if (_mono.Length < frames) _mono = new float[frames];
+        var src = buf.AsSpan(0, frames * bytesPer * channels);
+        var mono = _mono.AsSpan(0, frames);
+
+        if (kind == Sample.Float32)
         {
-            float sum = 0;
-            for (var c = 0; c < ch; c++)
-            {
-                var o = (i * ch + c) * bytesPer;
-                sum += wf.Encoding == WaveFormatEncoding.IeeeFloat ? BitConverter.ToSingle(buf, o)
-                    : bytesPer == 2 ? BitConverter.ToInt16(buf, o) / 32768f
-                    : bytesPer == 3 ? ((buf[o] << 8 | buf[o + 1] << 16 | buf[o + 2] << 24) >> 8) / 8388608f
-                    : BitConverter.ToInt32(buf, o) / 2147483648f;
-            }
-            mono[i] = sum / ch;
+            var f = MemoryMarshal.Cast<byte, float>(src);
+            if (channels == 1) f.CopyTo(mono);
+            else
+                for (var i = 0; i < frames; i++)
+                {
+                    float sum = 0;
+                    for (var c = 0; c < channels; c++) sum += f[i * channels + c];
+                    mono[i] = sum / channels;
+                }
         }
-        _onSamples?.Invoke(mono, SampleRate);
+        else
+        {
+            for (var i = 0; i < frames; i++)
+            {
+                float sum = 0;
+                for (var c = 0; c < channels; c++)
+                {
+                    var o = (i * channels + c) * bytesPer;
+                    sum += kind switch
+                    {
+                        Sample.Float64 => (float)BitConverter.ToDouble(src[o..]),
+                        Sample.Pcm8 => (src[o] - 128) / 128f,
+                        Sample.Pcm16 => BitConverter.ToInt16(src[o..]) / 32768f,
+                        Sample.Pcm24 => ((src[o] << 8 | src[o + 1] << 16 | src[o + 2] << 24) >> 8) / 8388608f,
+                        _ => BitConverter.ToInt32(src[o..]) / 2147483648f,
+                    };
+                }
+                mono[i] = sum / channels;
+            }
+        }
+        _onSamples?.Invoke(mono);
     }
 
     public void Stop()

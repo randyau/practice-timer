@@ -20,6 +20,20 @@ public sealed class LevelMeter : FrameworkElement
     public double Floor { get => (double)GetValue(FloorProperty); set => SetValue(FloorProperty, value); }
     public FrameTag Kind { get => (FrameTag)GetValue(KindProperty); set => SetValue(KindProperty, value); }
 
+    public LevelMeter() => Cursor = System.Windows.Input.Cursors.SizeWE;
+
+    private static readonly Dictionary<FrameTag, Brush> KindBrushes = new()
+    {
+        [FrameTag.Active] = Frozen(Color.FromRgb(0x22, 0xA5, 0x5B)),
+        [FrameTag.Metronome] = Frozen(Color.FromRgb(0x3B, 0x82, 0xF6)),
+        [FrameTag.Loud] = Frozen(Color.FromRgb(0xE0, 0x9B, 0x1A)),
+        [FrameTag.Quiet] = Frozen(Color.FromRgb(0x98, 0xA2, 0xB3)),
+    };
+    private static readonly Pen ThresholdPen = FrozenPen(new Pen(Brushes.Crimson, 2));
+
+    private static Brush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+    private static Pen FrozenPen(Pen p) { p.Freeze(); return p; }
+
     /// <summary>Raised while the user drags the trigger line; the value is a 0..1 meter position.</summary>
     public event Action<double>? ThresholdDragged;
 
@@ -48,21 +62,13 @@ public sealed class LevelMeter : FrameworkElement
     protected override void OnRender(DrawingContext dc)
     {
         var w = ActualWidth;
-        Cursor = System.Windows.Input.Cursors.SizeWE;
         var h = ActualHeight;
         dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, w, h));
         dc.DrawRoundedRectangle((Brush)FindResource("Panel"), new Pen((Brush)FindResource("Border"), 1), new Rect(0.5, 0.5, w - 1, h - 1), 6, 6);
-        var color = Kind switch
-        {
-            FrameTag.Active => Color.FromRgb(0x22, 0xA5, 0x5B),
-            FrameTag.Metronome => Color.FromRgb(0x3B, 0x82, 0xF6),
-            FrameTag.Loud => Color.FromRgb(0xE0, 0x9B, 0x1A),
-            _ => Color.FromRgb(0x98, 0xA2, 0xB3),
-        };
-        dc.DrawRoundedRectangle(new SolidColorBrush(color), null, new Rect(2, 2, Math.Max(0, (w - 4) * Level), h - 4), 4, 4);
+        dc.DrawRoundedRectangle(KindBrushes[Kind], null, new Rect(2, 2, Math.Max(0, (w - 4) * Level), h - 4), 4, 4);
         var floorX = 2 + (w - 4) * Floor;
         dc.DrawLine(new Pen((Brush)FindResource("Muted"), 1) { DashStyle = DashStyles.Dot }, new Point(floorX, 2), new Point(floorX, h - 2));
         var thrX = 2 + (w - 4) * Threshold;
-        dc.DrawLine(new Pen(Brushes.Crimson, 2), new Point(thrX, 0), new Point(thrX, h));
+        dc.DrawLine(ThresholdPen, new Point(thrX, 0), new Point(thrX, h));
     }
 }

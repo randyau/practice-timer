@@ -1,10 +1,73 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace PracticeTimer;
 
 public partial class App : Application
 {
+    private const string InstanceName = @"Local\PracticeTimer.Instance";
+    private const string ShowSignalName = @"Local\PracticeTimer.Show";
+    private Mutex? _instance;
+    private EventWaitHandle? _showSignal;
+    private bool _crashShown;
+
+    /// <summary>
+    /// One instance only: two would each hold their own copy of history.json and overwrite each other's sessions.
+    /// A second launch asks the first to show its window, then exits.
+    /// </summary>
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        _instance = new Mutex(true, InstanceName, out var first);
+        _showSignal = new EventWaitHandle(false, EventResetMode.AutoReset, ShowSignalName);
+        if (!first)
+        {
+            _showSignal.Set();
+            Shutdown();
+            return;
+        }
+        DispatcherUnhandledException += OnUiException;
+        AppDomain.CurrentDomain.UnhandledException += (_, a) => Log(a.ExceptionObject as Exception);
+        var waiter = new Thread(() =>
+        {
+            while (_showSignal.WaitOne())
+                Dispatcher.BeginInvoke(() => (MainWindow as Views.MainWindow)?.Restore());
+        }) { IsBackground = true, Name = "show-signal" };
+        waiter.Start();
+        base.OnStartup(e);
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        base.OnExit(e);
+        try { _instance?.ReleaseMutex(); } catch (ApplicationException) { }
+        _instance?.Dispose();
+    }
+
+    /// <summary>A bug must not take a running practice session down with it: log, tell the user once, carry on.</summary>
+    private void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)
+    {
+        Log(e.Exception);
+        e.Handled = true;
+        if (_crashShown) return; // a repeating fault must not stack up message boxes
+        _crashShown = true;
+        MessageBox.Show($"Something went wrong, but the timer is still running.\n\n{e.Exception.Message}\n\nDetails were written to {LogPath}",
+            "Practice Timer", MessageBoxButton.OK, MessageBoxImage.Warning);
+    }
+
+    private static string LogPath => Path.Combine(ViewModels.MainViewModel.DataDir, "error.log");
+
+    private static void Log(Exception? ex)
+    {
+        try
+        {
+            Directory.CreateDirectory(ViewModels.MainViewModel.DataDir);
+            File.AppendAllText(LogPath, $"{DateTime.Now:O}\n{ex}\n\n");
+        }
+        catch (Exception) { /* nothing more can be done */ }
+    }
+
     /// <summary>Follows the Windows app-mode setting when <paramref name="theme"/> is "System".</summary>
     public static bool IsDark(string theme) => theme switch
     {
