@@ -8,6 +8,7 @@ public sealed class AppSettings
     public double StartDelaySeconds { get; set; } = 1;
     public double StopDelaySeconds { get; set; } = 5;
     public double SensitivityMarginDb { get; set; } = 12;
+    public double MinTriggerDb { get; set; } = -55;
     public double DutyThreshold { get; set; } = 0.20;
     public bool MetronomeFilterEnabled { get; set; } = true;
     public bool AutoLearnMetronome { get; set; } = true;
@@ -16,7 +17,8 @@ public sealed class AppSettings
     public bool AlwaysOnTop { get; set; }
     public bool MinimizeToTray { get; set; }
     public bool StartMinimized { get; set; }
-    public bool DarkTheme { get; set; }
+    /// <summary>"System", "Light" or "Dark".</summary>
+    public string Theme { get; set; } = "System";
     public bool LargeText { get; set; }
     public string? LastInstrument { get; set; }
 }

@@ -95,4 +95,19 @@ public class PracticeClockManualTests
         c.Start(); _time.Advance(2); c.Tick();
         Assert.Equal(2, fired);
     }
+
+    [Fact]
+    public void ChangingTheGoalRearmsTheAnnouncement()
+    {
+        var c = Make();
+        var fired = 0;
+        c.Goal = TimeSpan.FromSeconds(1);
+        c.GoalReached += () => fired++;
+        c.Start(); _time.Advance(2); c.Tick();
+        c.Goal = TimeSpan.FromSeconds(5);
+        _time.Advance(1); c.Tick();
+        Assert.Equal(1, fired);
+        _time.Advance(5); c.Tick();
+        Assert.Equal(2, fired);
+    }
 }

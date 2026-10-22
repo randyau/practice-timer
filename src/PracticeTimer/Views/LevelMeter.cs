@@ -20,10 +20,37 @@ public sealed class LevelMeter : FrameworkElement
     public double Floor { get => (double)GetValue(FloorProperty); set => SetValue(FloorProperty, value); }
     public FrameTag Kind { get => (FrameTag)GetValue(KindProperty); set => SetValue(KindProperty, value); }
 
+    /// <summary>Raised while the user drags the trigger line; the value is a 0..1 meter position.</summary>
+    public event Action<double>? ThresholdDragged;
+
+    protected override void OnMouseLeftButtonDown(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonDown(e);
+        CaptureMouse();
+        Drag(e);
+    }
+
+    protected override void OnMouseMove(System.Windows.Input.MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (IsMouseCaptured) Drag(e);
+    }
+
+    protected override void OnMouseLeftButtonUp(System.Windows.Input.MouseButtonEventArgs e)
+    {
+        base.OnMouseLeftButtonUp(e);
+        ReleaseMouseCapture();
+    }
+
+    private void Drag(System.Windows.Input.MouseEventArgs e) =>
+        ThresholdDragged?.Invoke(Math.Clamp((e.GetPosition(this).X - 2) / Math.Max(1, ActualWidth - 4), 0, 1));
+
     protected override void OnRender(DrawingContext dc)
     {
         var w = ActualWidth;
+        Cursor = System.Windows.Input.Cursors.SizeWE;
         var h = ActualHeight;
+        dc.DrawRectangle(Brushes.Transparent, null, new Rect(0, 0, w, h));
         dc.DrawRoundedRectangle((Brush)FindResource("Panel"), new Pen((Brush)FindResource("Border"), 1), new Rect(0.5, 0.5, w - 1, h - 1), 6, 6);
         var color = Kind switch
         {

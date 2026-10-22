@@ -112,6 +112,29 @@ public class LoudnessGateTests
     }
 }
 
+public class GateSettingsForTests
+{
+    [Theory]
+    [InlineData(-70, -50, 20, -55)]
+    [InlineData(-70, -65, 5, -65)]
+    [InlineData(-70, -20, 30, -55)]
+    [InlineData(-70, -68, 4, -68)]
+    public void DraggedThresholdMapsToMarginAndMinimum(double floor, double target, double margin, double min)
+    {
+        var (m, a) = LoudnessGate.SettingsFor(target, floor);
+        Assert.Equal(margin, m, 3);
+        Assert.Equal(min, a, 3);
+    }
+
+    [Fact]
+    public void ReachableTargetBecomesTheGateThreshold()
+    {
+        var (m, a) = LoudnessGate.SettingsFor(-60, -75);
+        var g = new LoudnessGate { MarginDb = m, AbsoluteMinDb = a };
+        Assert.Equal(-60, g.EnterThreshold(-75), 3);
+    }
+}
+
 public class BandSpectrumTests
 {
     private readonly BandSpectrum _spec = new(SignalGen.Rate, 400);

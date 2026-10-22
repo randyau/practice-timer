@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
+using PracticeTimer.Core.Analysis;
 using PracticeTimer.Core.Detection;
 using PracticeTimer.Core.Metronome;
 using PracticeTimer.Core.Persistence;
@@ -84,6 +85,21 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     public string StartPauseLabel => IsRunning ? "Pause" : "Start";
     public string Instrument { get => _instrument; set => Set(ref _instrument, value); }
     public string Note { get; set; } = "";
+
+    public int GoalMinutes
+    {
+        get => Settings.GoalMinutes;
+        set
+        {
+            value = Math.Clamp(value, 0, 24 * 60);
+            if (value == Settings.GoalMinutes) return;
+            Settings.GoalMinutes = value;
+            Clock.Goal = value > 0 ? TimeSpan.FromMinutes(value) : null;
+            _goalAnnounced = false;
+            _settingsStore.Save(Settings);
+            Raise();
+        }
+    }
     public IReadOnlyList<string> Instruments => History.Instruments;
 
     public bool IsAuto
@@ -172,6 +188,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     public void ApplySettings()
     {
         _detector.MarginDb = Settings.SensitivityMarginDb;
+        _detector.AbsoluteMinDb = Settings.MinTriggerDb;
         _detector.DutyThreshold = Settings.DutyThreshold;
         _detector.MetronomeFilterEnabled = Settings.MetronomeFilterEnabled;
         Clock.StartDelay = TimeSpan.FromSeconds(Settings.StartDelaySeconds);
@@ -179,6 +196,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         Clock.Goal = Settings.GoalMinutes > 0 ? TimeSpan.FromMinutes(Settings.GoalMinutes) : null;
         if (_pipeline != null) _pipeline.AutoLearnEnabled = Settings.AutoLearnMetronome;
         _settingsStore.Save(Settings);
+        Raise(nameof(GoalMinutes));
         SettingsApplied?.Invoke();
     }
 
@@ -219,6 +237,18 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         if (_pipeline == null) return;
         if (IsLearning) { _pipeline.CancelLearn(); return; }
         _pipeline.StartLearn();
+    }
+
+    /// <summary>Moves the trigger level to a meter position (0..1), as dragged on the level meter.</summary>
+    public void SetThresholdLevel(double level)
+    {
+        var floorDb = (_pipeline?.Snapshot ?? MeterSnapshot.Empty).FloorDb;
+        var (margin, min) = LoudnessGate.SettingsFor(level * 80 - 80, floorDb);
+        Settings.SensitivityMarginDb = margin;
+        Settings.MinTriggerDb = min;
+        _detector.MarginDb = margin;
+        _detector.AbsoluteMinDb = min;
+        _settingsStore.Save(Settings);
     }
 
     public void Calibrate() => _pipeline?.StartCalibration();
@@ -302,7 +332,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         if (Clock.Goal is { } goal)
         {
             GoalProgress = Math.Min(1, e.TotalSeconds / goal.TotalSeconds);
-            GoalText = e >= goal ? "Goal reached!" : $"Goal: {goal.TotalMinutes:0} min";
+            GoalText = e >= goal ? "Goal reached!" : $"{(goal - e).TotalMinutes:0.#} min to go";
         }
         else { GoalProgress = 0; GoalText = "No goal set"; }
 

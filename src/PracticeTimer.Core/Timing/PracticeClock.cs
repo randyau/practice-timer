@@ -18,7 +18,16 @@ public sealed class PracticeClock
     public PracticeClock(IMonotonicClock time) => _time = time;
 
     public ClockState State { get; private set; } = ClockState.Stopped;
-    public TimeSpan? Goal { get; set; }
+    private TimeSpan? _goal;
+
+    public TimeSpan? Goal
+    {
+        get => _goal;
+        set
+        {
+            lock (_gate) { _goal = value; _goalFired = false; }
+        }
+    }
     public TimeSpan StartDelay { get; set; } = TimeSpan.FromSeconds(1);
     public TimeSpan StopDelay { get; set; } = TimeSpan.FromSeconds(5);
 
@@ -115,7 +124,7 @@ public sealed class PracticeClock
         bool fire;
         lock (_gate)
         {
-            fire = Goal is { } g && !_goalFired && ElapsedUnlocked() >= g;
+            fire = _goal is { } g && !_goalFired && ElapsedUnlocked() >= g;
             if (fire) _goalFired = true;
         }
         if (fire) GoalReached?.Invoke();

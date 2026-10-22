@@ -103,6 +103,7 @@ public class SettingsStoreTests : TempDirTest
         Assert.Equal(5, s.StopDelaySeconds);
         Assert.True(s.MetronomeFilterEnabled);
         Assert.True(s.AutoLearnMetronome);
+        Assert.Equal("System", s.Theme);
     }
 
     [Fact]

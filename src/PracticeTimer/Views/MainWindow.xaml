@@ -40,9 +40,9 @@
         <Border Grid.Row="3" Margin="0,22,0,0" Padding="12" CornerRadius="10" Background="{DynamicResource Panel}"
                 BorderBrush="{DynamicResource Border}" BorderThickness="1">
             <StackPanel>
-                <v:LevelMeter Height="22" Level="{Binding Level}" Threshold="{Binding Threshold}" Floor="{Binding Floor}" Kind="{Binding Tag}" />
+                <v:LevelMeter x:Name="Meter" Height="22" ToolTip="Drag the red line left to hear quieter playing, right to ignore more noise" Level="{Binding Level}" Threshold="{Binding Threshold}" Floor="{Binding Floor}" Kind="{Binding Tag}" />
                 <Grid Margin="0,6,0,0">
-                    <TextBlock Text="Green = playing, blue = metronome (ignored), red line = trigger level" FontSize="11" Foreground="{DynamicResource Muted}" />
+                    <TextBlock Text="Green = playing, blue = metronome (ignored). Drag the red trigger line to adjust sensitivity." FontSize="11" Foreground="{DynamicResource Muted}" />
                     <TextBlock Text="{Binding TempoText}" FontSize="11" HorizontalAlignment="Right" Foreground="{DynamicResource Muted}" />
                 </Grid>
                 <Grid Margin="0,10,0,0">
@@ -57,9 +57,15 @@
         </Border>
 
         <Grid Grid.Row="4" Margin="0,16,0,0">
-            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-            <TextBlock Text="{Binding GoalText}" VerticalAlignment="Center" Width="120" />
-            <ProgressBar Grid.Column="1" Height="12" Maximum="1" Value="{Binding GoalProgress, Mode=OneWay}" />
+            <Grid.ColumnDefinitions><ColumnDefinition Width="120" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <TextBlock Text="Goal (minutes)" VerticalAlignment="Center" />
+            <TextBox Grid.Column="1" Width="56" Padding="4,3" HorizontalContentAlignment="Center"
+                     Text="{Binding GoalMinutes, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="Minutes to practice. 0 means no goal." />
+            <StackPanel Grid.Column="2" Margin="12,0,0,0" VerticalAlignment="Center">
+                <ProgressBar Height="12" Maximum="1" Value="{Binding GoalProgress, Mode=OneWay}" />
+                <TextBlock Text="{Binding GoalText}" FontSize="11" Foreground="{DynamicResource Muted}" Margin="0,3,0,0" />
+            </StackPanel>
         </Grid>
 
         <Grid Grid.Row="5" Margin="0,14,0,0">

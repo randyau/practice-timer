@@ -53,6 +53,9 @@ public partial class SettingsWindow : Window
         MessageBox.Show(this, "Calibrating for 3 seconds. Keep the room quiet, then close this message.", "Calibrate", MessageBoxButton.OK);
     }
 
+    private void WindowsSound_Click(object sender, RoutedEventArgs e) =>
+        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:sound") { UseShellExecute = true });
+
     private void DeleteMetronome_Click(object sender, RoutedEventArgs e)
     {
         if (((Button)sender).Tag is not MetronomeItem item) return;

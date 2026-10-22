@@ -16,9 +16,11 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _vm;
         _vm.ConfirmSave = AskSave;
+        Meter.ThresholdDragged += level => _vm.SetThresholdLevel(level);
         _vm.SettingsApplied += ApplyWindowSettings;
         _tray = new TrayIcon(Restore, Close);
         ApplyWindowSettings();
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnSystemPreferenceChanged;
         Loaded += (_, _) =>
         {
             _vm.Start();
@@ -30,10 +32,16 @@ public partial class MainWindow : Window
         };
     }
 
+    private void OnSystemPreferenceChanged(object sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category == Microsoft.Win32.UserPreferenceCategory.General && _vm.Settings.Theme == "System")
+            Dispatcher.BeginInvoke(() => App.ApplyTheme("System"));
+    }
+
     private void ApplyWindowSettings()
     {
         var s = _vm.Settings;
-        App.ApplyTheme(s.DarkTheme);
+        App.ApplyTheme(s.Theme);
         Topmost = s.AlwaysOnTop;
         Root.LayoutTransform = new ScaleTransform(s.LargeText ? 1.25 : 1, s.LargeText ? 1.25 : 1);
         _tray.Visible = s.MinimizeToTray;
@@ -63,6 +71,7 @@ public partial class MainWindow : Window
     {
         base.OnClosing(e);
         if (!_vm.Reset()) { e.Cancel = true; return; }
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnSystemPreferenceChanged;
         _vm.Dispose();
         _tray.Dispose();
     }
