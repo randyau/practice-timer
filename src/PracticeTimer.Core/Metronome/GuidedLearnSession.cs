@@ -53,7 +53,8 @@ public sealed class GuidedLearnSession
         var profile = new MetronomeProfile { Locked = true, Clusters = kept, MinBpm = Bpm.Value, MaxBpm = Bpm.Value };
         var add = _bank.TryAdd(profile);
         Result = add.Profile;
-        Status = add.Kind switch { AddKind.Added => LearnStatus.Success, AddKind.Merged => LearnStatus.AlreadyKnown, _ => LearnStatus.BankFull };
+        Status = add.Kind switch { AddKind.Added => LearnStatus.Success, AddKind.Merged when !add.PromotedTentative => LearnStatus.AlreadyKnown,
+            AddKind.Merged => LearnStatus.Success, _ => LearnStatus.BankFull };
     }
 
     public void Cancel()

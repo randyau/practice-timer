@@ -23,6 +23,7 @@ public sealed class LoudnessDetector : IActivityDetector
     }
 
     public FingerprintBank Bank { get; }
+    public double ThresholdDb => _gate.EnterThreshold(Floor.Floor);
     public bool SustainedOpen => _bursts.IsSustained;
     public event Action<CleanTick>? CleanTick;
 

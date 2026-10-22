@@ -4,7 +4,7 @@ namespace PracticeTimer.Core.Metronome;
 
 public enum AddKind { Added, Merged, Full }
 
-public readonly record struct AddResult(AddKind Kind, MetronomeProfile Profile);
+public readonly record struct AddResult(AddKind Kind, MetronomeProfile Profile, bool PromotedTentative = false);
 
 public sealed class FingerprintBank
 {
@@ -44,8 +44,9 @@ public sealed class FingerprintBank
         var existing = _profiles.FirstOrDefault(p => p.Clusters.Any(a => candidate.Clusters.Any(b => BandSpectrum.Cosine(a.Spectrum, b.Spectrum) >= MergeThreshold)));
         if (existing != null)
         {
+            var promoted = candidate.Locked && !existing.Locked;
             Merge(existing, candidate);
-            return new AddResult(AddKind.Merged, existing);
+            return new AddResult(AddKind.Merged, existing, promoted);
         }
         if (_profiles.Count >= MaxProfiles)
         {

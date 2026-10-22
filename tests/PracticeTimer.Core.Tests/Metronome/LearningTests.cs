@@ -83,6 +83,17 @@ public class GuidedLearnTests
     }
 
     [Fact]
+    public void TeachingAnAutoLearnedMetronomePromotesItAsSuccess()
+    {
+        var bank = new FingerprintBank();
+        new Harness(bank, autoLearn: true).Run(ClickTrain(90, 15, () => Click(-20)));
+        Assert.False(Assert.Single(bank.Profiles).Locked);
+        var s = Learn(ClickTrain(100, 15, () => Click(-20)), out _, bank);
+        Assert.Equal(LearnStatus.Success, s.Status);
+        Assert.True(Assert.Single(bank.Profiles).Locked);
+    }
+
+    [Fact]
     public void CancelStopsLearning()
     {
         var h = new Harness();
