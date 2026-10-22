@@ -73,5 +73,10 @@
         <!-- The stock ComboBox draws a light box whatever the theme, so its text stays dark to remain readable on it. -->
         <Style TargetType="ComboBox"><Setter Property="Foreground" Value="#1B1F24" /></Style>
         <Style TargetType="ComboBoxItem"><Setter Property="Foreground" Value="#1B1F24" /></Style>
+        <Style x:Key="Primary" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{DynamicResource Accent}" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
     </Application.Resources>
 </Application>

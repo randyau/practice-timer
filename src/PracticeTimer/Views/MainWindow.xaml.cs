@@ -107,7 +107,7 @@ public partial class MainWindow : Window
         Microsoft.Win32.SystemEvents.PowerModeChanged -= OnPowerModeChanged;
         Application.Current.SessionEnding -= OnSessionEnding;
         _vm.Dispose();
-        _tray.Dispose();
+        _tray?.Dispose();
     }
 
     private void StartPause_Click(object sender, RoutedEventArgs e) => _vm.StartPause();
