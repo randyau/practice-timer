@@ -9,23 +9,31 @@ using PracticeTimer.Core.Tests.Support;
 // --learn-at   start a guided metronome learn at that time
 // --bank       first learn the metronome in that recording, then replay <file.wav> against what was learned
 // --ticks      list each clean burst with its spectral similarity to the previous one
+// --pink <dB>      lay pink noise at that RMS level over the recording (and over the teaching recording)
+// --blower <dB>    lay leaf-blower noise (wandering pink noise) at that average level over the recording
+// --repeat <n>     play the recording n times in a row (steady noise needs 10 s or more to be recognised)
 // --rows       print one line per 100 ms: time, peak dBFS, trigger dBFS, tag
 
 if (args.Length == 0) { Console.Error.WriteLine("usage: replay <file.wav> [--auto] [--learn-at s] [--bank file.wav] [--ticks] [--rows]"); return 2; }
 var file = args[0];
 string? Opt(string name) => Array.IndexOf(args, name) is var i and >= 0 && i + 1 < args.Length ? args[i + 1] : null;
 double? learnAt = Opt("--learn-at") is { } l ? double.Parse(l) : null;
+float[] Noisy(float[] s) =>
+    Opt("--pink") is { } pk ? NoiseGen.Mix(s, NoiseGen.Pink(s.Length, double.Parse(pk)))
+    : Opt("--blower") is { } bl ? NoiseGen.Mix(s, NoiseGen.LeafBlower(s.Length, 48000, double.Parse(bl)))
+    : s;
 var bank = new FingerprintBank();
 if (Opt("--bank") is { } bankFile)
 {
     var (bs, br) = WavReader.Read(bankFile);
-    var taught = ReplayRunner.Teach(bs, br, bank);
+    var taught = ReplayRunner.Teach(Noisy(bs), br, bank);
     Console.WriteLine($"== taught from {bankFile}: {(taught == null ? "not finished" : $"{taught.Status}, {taught.TickCount} ticks, {taught.Bpm:0.0} BPM")}");
 }
 if (args.Contains("--ticks")) { PrintTicks(file); return 0; }
 
 var (samples, rate) = WavReader.Read(file);
-var r = ReplayRunner.Run(samples, rate, bank, args.Contains("--auto"), learnAt);
+if (Opt("--repeat") is { } rep) samples = Enumerable.Repeat(samples, int.Parse(rep)).SelectMany(x => x).ToArray();
+var r = ReplayRunner.Run(Noisy(samples), rate, bank, args.Contains("--auto"), learnAt);
 Console.WriteLine($"== {file}\n{r.Seconds:0.0} s at {rate} Hz");
 if (args.Contains("--rows")) foreach (var row in r.Rows) Console.WriteLine(row);
 Console.WriteLine("per 100 ms: A active, m metronome, L loud-but-ignored, . quiet");

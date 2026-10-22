@@ -85,4 +85,48 @@ public class RecordingTests
         var run = ReplayRunner.Run(s, r, new FingerprintBank(), auto: true);
         Assert.True(run.CreditedSeconds > 8, $"credited {run.CreditedSeconds:0.0} s of {run.Seconds:0.0} s");
     }
+
+    private static float[] Repeat(float[] s, int times) => Enumerable.Repeat(s, times).SelectMany(x => x).ToArray();
+
+    private static ReplayResult Noisy(string recording, int times, Func<int, float[]> noise, FingerprintBank? bank = null)
+    {
+        var (s, r) = Load(recording);
+        var heard = NoiseGen.Mix(Repeat(s, times), noise(s.Length * times));
+        return ReplayRunner.Run(heard, r, bank ?? new FingerprintBank(), auto: true);
+    }
+
+    [Theory]
+    [InlineData(-60)] // a quiet room, below the trigger
+    [InlineData(-45)] // loud enough to read as playing until it is recognised as steady noise, about 10 s in
+    public void PinkNoiseUnderTheMetronomeIsNotCounted(double noiseDb)
+    {
+        var run = Noisy("metronome.wav", 4, n => NoiseGen.Pink(n, noiseDb));
+        Assert.True(run.CreditedSeconds < 13, $"credited {run.CreditedSeconds:0.0} s of {run.Seconds:0.0} s");
+    }
+
+    [Theory]
+    [InlineData(-60)]
+    [InlineData(-45)]
+    public void ClapsStillCountThroughPinkNoise(double noiseDb)
+    {
+        var run = Noisy("claps.wav", 2, n => NoiseGen.Pink(n, noiseDb));
+        Assert.True(run.CreditedSeconds > 30, $"credited {run.CreditedSeconds:0.0} s of {run.Seconds:0.0} s");
+    }
+
+    [Fact]
+    public void LeafBlowerOutsideIsNotCountedAsPlaying()
+    {
+        var (s, r) = Load("metronome.wav");
+        var heard = NoiseGen.Mix(Repeat(s, 4), NoiseGen.LeafBlower(s.Length * 4, r, -40));
+        var run = ReplayRunner.Run(heard, r, new FingerprintBank(), auto: true);
+        Assert.True(run.CreditedSeconds < 13, $"credited {run.CreditedSeconds:0.0} s of {run.Seconds:0.0} s");
+    }
+
+    [Fact]
+    public void ClapsStillCountWithALeafBlowerOutside()
+    {
+        var (s, r) = Load("claps.wav");
+        var heard = NoiseGen.Mix(Repeat(s, 2), NoiseGen.LeafBlower(s.Length * 2, r, -40));
+        Assert.True(ReplayRunner.Run(heard, r, new FingerprintBank(), auto: true).CreditedSeconds > 30);
+    }
 }

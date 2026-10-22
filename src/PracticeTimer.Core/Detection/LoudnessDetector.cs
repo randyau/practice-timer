@@ -12,10 +12,13 @@ public sealed class LoudnessDetector : IActivityDetector
     private TimeSpan _holdUntil = TimeSpan.MinValue;
 
     private static readonly TimeSpan CleanGap = TimeSpan.FromMilliseconds(80);
+    // A struck or plucked note rings on below the gate, more so in a noisy room where the gate sits higher, so a short
+    // burst counts for at least this much loud time when judging whether someone is playing.
+    private static readonly TimeSpan MinNoteDuty = TimeSpan.FromMilliseconds(150);
     // Steady loud sound with no rests (a fan, a hum) is room noise, not playing; see FeedSteadyNoise.
-    private static readonly TimeSpan SteadyAfter = TimeSpan.FromSeconds(30);
-    private const double SteadyRangeDb = 6;
-    private const int SteadyWindowFrames = 400;
+    private static readonly TimeSpan SteadyAfter = TimeSpan.FromSeconds(10);
+    private const double SteadyRangeDb = 8;
+    private const int SteadyWindowFrames = 320;
     private readonly Queue<double> _loudRun = new();
     private TimeSpan _loudFor;
     private Burst? _pendingClean;
@@ -117,7 +120,7 @@ public sealed class LoudnessDetector : IActivityDetector
             if (closed.GapBefore >= CleanGap) { _pendingClean = closed; _pendingMatched = matched; }
             if (!metronome)
             {
-                AddDuty(now, closed.Duration);
+                AddDuty(now, closed.Duration < MinNoteDuty ? MinNoteDuty : closed.Duration);
                 active = DutyFraction(now) >= _s.DutyThreshold;
             }
         }
@@ -126,8 +129,8 @@ public sealed class LoudnessDetector : IActivityDetector
 
     /// <summary>
     /// The floor only learns from quiet frames, so a step up in room noise bigger than the margin would never be
-    /// learned and would read as playing forever. After 30 s of unbroken loudness that never varies by more than
-    /// 6 dB over the last 10 s, the level is treated as noise and fed to the floor, which then rises past it.
+    /// learned and would read as playing forever. After 10 s of unbroken loudness whose 10th to 60th percentile spread
+    /// over the last 8 s is within 8 dB, the level is treated as noise and fed to the floor, which then rises past it.
     /// Real playing has rests and dynamics well beyond that.
     /// </summary>
     private void FeedSteadyNoise(double db, TimeSpan frameLength)
@@ -136,9 +139,12 @@ public sealed class LoudnessDetector : IActivityDetector
         _loudRun.Enqueue(db);
         while (_loudRun.Count > SteadyWindowFrames) _loudRun.Dequeue();
         if (_loudFor < SteadyAfter || _loudRun.Count < SteadyWindowFrames) return;
-        double lo = double.MaxValue, hi = double.MinValue;
-        foreach (var v in _loudRun) { lo = Math.Min(lo, v); hi = Math.Max(hi, v); }
-        if (hi - lo <= SteadyRangeDb) Floor.Add(db);
+        // Percentiles, not min and max, so ticks or notes riding on the noise don't make it look like it is varying.
+        Span<double> sorted = stackalloc double[SteadyWindowFrames];
+        var n = 0;
+        foreach (var v in _loudRun) sorted[n++] = v;
+        sorted.Sort();
+        if (sorted[SteadyWindowFrames * 6 / 10] - sorted[SteadyWindowFrames / 10] <= SteadyRangeDb) Floor.Add(db);
     }
 
     private void ReleaseCleanTick(TimeSpan now, bool loud)

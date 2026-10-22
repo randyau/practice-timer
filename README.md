@@ -32,7 +32,7 @@ SDK 10 is pinned in `global.json`; the app targets `net8.0-windows` and is cross
   four are saved. Auto-learned ones are tentative, session-only, and can't change a saved one.
 - Closing the window or logging off saves the session automatically. Reset asks first.
 - Microphone loss, sleep, or a mic that stops sending audio pauses the timer and leaves a warning until you act.
-- Steady room noise that starts mid-session (a fan) stops counting as playing after about 30 s; Calibrate in Settings
+- Steady room noise that starts mid-session (a fan) stops counting as playing after about 10 s; Calibrate in Settings
   does it immediately.
 - Files are written atomically; corrupt or newer-format files are set aside, never deleted, and a file that is locked
   at startup is never overwritten with defaults. See

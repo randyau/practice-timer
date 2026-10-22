@@ -8,5 +8,6 @@
     <Compile Include="..\..\tests\PracticeTimer.Core.Tests\Support\WavReader.cs" Link="WavReader.cs" />
     <Compile Include="..\..\tests\PracticeTimer.Core.Tests\Support\FakeClock.cs" Link="FakeClock.cs" />
     <Compile Include="..\..\tests\PracticeTimer.Core.Tests\Support\ReplayRunner.cs" Link="ReplayRunner.cs" />
+    <Compile Include="..\..\tests\PracticeTimer.Core.Tests\Support\NoiseGen.cs" Link="NoiseGen.cs" />
   </ItemGroup>
 </Project>
