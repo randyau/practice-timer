@@ -57,7 +57,8 @@ public class FingerprintBankTests
     public void DisabledProfilesDoNotMatch()
     {
         var b = new FingerprintBank();
-        b.TryAdd(Profile(2000)).Profile.Enabled = false;
+        var id = b.TryAdd(Profile(2000)).Profile.Id;
+        b.ApplyEdits(new[] { new ProfileEdit(id, "m", Enabled: false, Remove: false) });
         Assert.False(Matches(b, 2000));
     }
 
@@ -134,5 +135,91 @@ public class FingerprintBankTests
         b.TryAdd(Profile(300, "l")); b.TryAdd(Profile(2000, "t", false));
         b.ClearTentative();
         Assert.Equal("l", Assert.Single(b.Profiles).Name);
+    }
+
+    [Fact]
+    public void ProfilesIsASnapshotNotLiveState()
+    {
+        var b = new FingerprintBank();
+        b.TryAdd(Profile(2000, "orig"));
+        var snap = b.Profiles;
+        snap[0].Name = "changed";
+        snap[0].Clusters.Clear();
+        Assert.Equal("orig", b.Profiles[0].Name);
+        Assert.True(Matches(b, 2000));
+    }
+
+    [Fact]
+    public void ApplyEditsRenamesDisablesAndRemoves()
+    {
+        var b = new FingerprintBank();
+        var a = b.TryAdd(Profile(2000, "a")).Profile.Id;
+        var c = b.TryAdd(Profile(500, "c")).Profile.Id;
+        b.ApplyEdits(new[] { new ProfileEdit(a, "renamed", true, false), new ProfileEdit(c, "c", true, Remove: true) });
+        Assert.Equal("renamed", Assert.Single(b.Profiles).Name);
+    }
+
+    [Fact]
+    public void TentativeCandidateNeverAltersALockedProfile()
+    {
+        var b = new FingerprintBank();
+        b.TryAdd(Profile(2000, "saved", locked: true));
+        var before = b.Profiles[0].Clusters[0].Count;
+        var near = Profile(2000, "auto", locked: false);
+        near.Clusters[0].Count = 6;
+        var r = b.TryAdd(near);
+        Assert.Equal(AddKind.Merged, r.Kind);
+        var after = Assert.Single(b.Profiles);
+        Assert.Equal(before, after.Clusters[0].Count);
+        Assert.Equal("saved", after.Name);
+    }
+
+    [Fact]
+    public void ProfilesFromADifferentBandLayoutAreNotComparable()
+    {
+        var b = new FingerprintBank();
+        b.TryAdd(Profile(2000));
+        b.BandHiHz = BandSpectrum.EffectiveHiHz(8000);
+        Assert.False(Matches(b, 2000));
+        b.BandHiHz = BandSpectrum.DefaultHiHz;
+        Assert.True(Matches(b, 2000));
+    }
+
+    [Fact]
+    public void LegacyProfilesWithoutBandRecordUseTheDefaultLayout()
+    {
+        var b = new FingerprintBank();
+        var p = Profile(2000);
+        b.Load(new[] { p });
+        Assert.Equal(0, p.BandHiHz);
+        Assert.True(Matches(b, 2000));
+    }
+
+    [Fact]
+    public void ConcurrentUseFromTwoThreadsDoesNotThrow()
+    {
+        var b = new FingerprintBank();
+        var stop = false;
+        var audio = Task.Run(() =>
+        {
+            var i = 0;
+            while (!Volatile.Read(ref stop))
+            {
+                b.TryAdd(Profile(500 + (i++ % 7) * 700, locked: false));
+                Matches(b, 2000);
+                b.NoteSustained(Of(Click(-20, 2000)));
+            }
+        });
+        var ui = Task.Run(() =>
+        {
+            for (var i = 0; i < 2000; i++)
+            {
+                _ = b.Profiles.Sum(p => p.Clusters.Count);
+                if (i % 50 == 0) b.ClearTentative();
+            }
+        });
+        Assert.True(ui.Wait(20000));
+        Volatile.Write(ref stop, true);
+        Assert.True(audio.Wait(5000));
     }
 }

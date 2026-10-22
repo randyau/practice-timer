@@ -36,7 +36,10 @@
                     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /></Grid.RowDefinitions>
                     <CheckBox Content="Ignore metronome ticks" IsChecked="{Binding MetronomeFilterEnabled}" />
                     <CheckBox Grid.Row="1" Content="Auto-learn metronomes (tentative, this session only)" IsChecked="{Binding AutoLearnMetronome}" />
-                    <TextBlock Grid.Row="2" Text="Saved metronomes (taught with 'Learn metronome' on the main window)" Margin="0,12,0,6" Foreground="{DynamicResource Muted}" />
+                    <DockPanel Grid.Row="2" Margin="0,12,0,6" LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Content="Forget all" Padding="8,2" Click="ForgetAll_Click" />
+                        <TextBlock Text="Saved metronomes (taught with 'Learn metronome' on the main window)" Foreground="{DynamicResource Muted}" VerticalAlignment="Center" />
+                    </DockPanel>
                     <ListBox Grid.Row="3" x:Name="MetroList" Background="{DynamicResource Panel}" HorizontalContentAlignment="Stretch">
                         <ListBox.ItemTemplate>
                             <DataTemplate>

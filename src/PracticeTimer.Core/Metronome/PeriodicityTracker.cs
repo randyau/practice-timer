@@ -16,6 +16,12 @@ public sealed class PeriodicityTracker
 
     public double? CurrentBpm => _locked ? 60.0 / _interval.TotalSeconds : null;
 
+    /// <summary>Drops the lock once the pulse has been silent for the hold time, so the tempo readout clears.</summary>
+    public void Expire(TimeSpan now)
+    {
+        if (_locked && now - _lastTick > HoldTime) _locked = false;
+    }
+
     /// <summary>True when this onset is part of the metronome pulse.</summary>
     public bool Observe(TimeSpan onset)
     {

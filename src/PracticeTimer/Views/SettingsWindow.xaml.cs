@@ -32,6 +32,7 @@ public partial class SettingsWindow : Window
     private readonly MainViewModel _vm;
     private readonly AppSettings _original;
     private readonly ObservableCollection<MetronomeItem> _items = new();
+    private readonly HashSet<string> _removed = new();
 
     public SettingsWindow(MainViewModel vm)
     {
@@ -59,14 +60,27 @@ public partial class SettingsWindow : Window
     private void DeleteMetronome_Click(object sender, RoutedEventArgs e)
     {
         if (((Button)sender).Tag is not MetronomeItem item) return;
-        _vm.Bank.Remove(item.Profile.Id);
+        _removed.Add(item.Profile.Id);
         _items.Remove(item);
+    }
+
+    private void ForgetAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (_items.Count == 0) return;
+        var r = MessageBox.Show(this, "Forget every saved metronome? This takes effect when you press OK.", "Forget all",
+            MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+        if (r != MessageBoxResult.OK) return;
+        foreach (var item in _items) _removed.Add(item.Profile.Id);
+        _items.Clear();
     }
 
     private void Ok_Click(object sender, RoutedEventArgs e)
     {
         foreach (var prop in typeof(AppSettings).GetProperties().Where(p => p.CanWrite))
             prop.SetValue(_original, prop.GetValue(_working));
+        // Metronome edits were made on copies; they reach the live bank only here, so Cancel really cancels.
+        _vm.Bank.ApplyEdits(_items.Select(i => new ProfileEdit(i.Profile.Id, i.Name, i.Enabled, false))
+            .Concat(_removed.Select(id => new ProfileEdit(id, "", false, true))));
         _vm.SaveMetronomes();
         _vm.ApplySettings();
         DialogResult = true;

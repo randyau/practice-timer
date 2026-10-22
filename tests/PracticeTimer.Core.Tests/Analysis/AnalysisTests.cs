@@ -81,6 +81,30 @@ public class NoiseFloorEstimatorTests
     }
 }
 
+public class NoiseFloorCalibrationTests
+{
+    [Fact]
+    public void CalibrationSurvivesFurtherQuietFramesFromTheSameRoom()
+    {
+        var room = Enumerable.Range(0, 120).Select(i => -70.0 + i % 20).ToList(); // -70..-51
+        var n = new NoiseFloorEstimator();
+        n.Calibrate(room);
+        var calibrated = n.Floor;
+        Assert.InRange(calibrated, -53, -51);
+        n.Add(-60);
+        Assert.InRange(n.Floor, calibrated - 1.5, calibrated + 1.5);
+        for (var i = 0; i < 400; i++) n.Add(room[i % room.Count]);
+        Assert.InRange(n.Floor, calibrated - 1.5, calibrated + 1.5);
+    }
+
+    [Fact]
+    public void NonFiniteSamplesReadAsSilence()
+    {
+        Assert.Equal(Dsp.MinDb, Dsp.Dbfs(new[] { 0.1f, float.NaN, 0.1f }));
+        Assert.Equal(Dsp.MinDb, Dsp.Dbfs(new[] { float.PositiveInfinity }));
+    }
+}
+
 public class LoudnessGateTests
 {
     private static LoudnessGate Make() => new() { MarginDb = 12, AbsoluteMinDb = -55 };

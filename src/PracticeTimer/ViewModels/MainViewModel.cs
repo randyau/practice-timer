@@ -274,15 +274,23 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         };
         if (s.Status is LearnStatus.Success && s.Result != null)
         {
-            s.Result.Name = $"Metronome {Bank.Profiles.Count}";
-            s.Result.MicDeviceId = SelectedDevice?.Id;
-            s.Result.MicName = SelectedDevice?.Name;
+            Bank.ApplyEdits(new[] { new ProfileEdit(s.Result.Id, NextMetronomeName(), true, false) });
+            Bank.SetMic(s.Result.Id, SelectedDevice?.Id, SelectedDevice?.Name);
             SaveMetronomes();
         }
         if (s.Status == LearnStatus.AlreadyKnown) SaveMetronomes();
         if (s.Status is LearnStatus.Success or LearnStatus.AlreadyKnown) System.Media.SystemSounds.Asterisk.Play();
         _learnMessage = message;
         _learnMessageUntil = DateTime.Now.AddSeconds(8);
+    }
+
+    /// <summary>"Metronome N" with the lowest N not already used by a saved metronome.</summary>
+    private string NextMetronomeName()
+    {
+        var used = Bank.Profiles.Where(p => p.Locked).Select(p => p.Name).ToHashSet();
+        var n = 1;
+        while (used.Contains($"Metronome {n}")) n++;
+        return $"Metronome {n}";
     }
 
     private void OnGoalReached()
@@ -300,7 +308,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         ElapsedText = $"{(int)e.TotalHours:00}:{e.Minutes:00}:{e.Seconds:00}";
         IsRunning = Clock.State is ClockState.ManualRunning or ClockState.Listening or ClockState.Playing or ClockState.PausedQuiet;
 
-        var snap = _pipeline?.Snapshot ?? MeterSnapshot.Empty;
+        var snap = _pipeline?.TakeSnapshot() ?? MeterSnapshot.Empty;
         var learn = _pipeline?.Learn;
         IsLearning = learn is { IsDone: false };
         IsCalibrating = snap.Calibrating;

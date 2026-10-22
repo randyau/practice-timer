@@ -7,13 +7,15 @@ namespace PracticeTimer.Core.Analysis;
 public sealed class BandSpectrum
 {
     public const int Bands = 24;
+    public const double DefaultLoHz = 100;
+    public const double DefaultHiHz = 7500;
     private readonly int _frameSamples;
     private readonly int _fft;
     private readonly double[] _window;
     private readonly int[] _edges; // bin index per band edge
     private readonly Complex[] _buf;
 
-    public BandSpectrum(int sampleRate, int frameSamples, double loHz = 100, double hiHz = 7500)
+    public BandSpectrum(int sampleRate, int frameSamples, double loHz = DefaultLoHz, double hiHz = DefaultHiHz)
     {
         _frameSamples = frameSamples;
         _fft = 1;
@@ -25,12 +27,15 @@ public sealed class BandSpectrum
         _edges = Edges(_fft, sampleRate, loHz, hiHz);
     }
 
-    private static readonly ConcurrentDictionary<(int, int), int[]> EdgeCache = new();
+    private static readonly ConcurrentDictionary<(int, int, double, double), int[]> EdgeCache = new();
 
-    private static int[] Edges(int fft, int sampleRate, double loHz = 100, double hiHz = 7500) =>
-        EdgeCache.GetOrAdd((fft, sampleRate), _ =>
+    /// <summary>Upper band edge actually used at a sample rate; it stays at the default unless the rate is too low for it.</summary>
+    public static double EffectiveHiHz(int sampleRate, double hiHz = DefaultHiHz) => Math.Min(hiHz, sampleRate * 0.45);
+
+    private static int[] Edges(int fft, int sampleRate, double loHz = DefaultLoHz, double hiHz = DefaultHiHz) =>
+        EdgeCache.GetOrAdd((fft, sampleRate, loHz, hiHz), _ =>
         {
-            hiHz = Math.Min(hiHz, sampleRate * 0.45);
+            hiHz = EffectiveHiHz(sampleRate, hiHz);
             var edges = new int[Bands + 1];
             var binHz = (double)sampleRate / fft;
             for (var b = 0; b <= Bands; b++)

@@ -20,7 +20,19 @@ public sealed class MetronomeProfile
     public double MaxBpm { get; set; }
     public string? MicDeviceId { get; set; }
     public string? MicName { get; set; }
+    /// <summary>Upper band edge the fingerprints were taken with; 0 in files written before this was recorded.</summary>
+    public double BandHiHz { get; set; }
     public DateTime CreatedUtc { get; set; } = DateTime.UtcNow;
+
+    [JsonIgnore] public double EffectiveBandHiHz => BandHiHz > 0 ? BandHiHz : Analysis.BandSpectrum.DefaultHiHz;
+
+    public MetronomeProfile Clone() => new()
+    {
+        Id = Id, Name = Name, Locked = Locked, Enabled = Enabled, MinBpm = MinBpm, MaxBpm = MaxBpm,
+        MicDeviceId = MicDeviceId, MicName = MicName, BandHiHz = BandHiHz, CreatedUtc = CreatedUtc,
+        LastMatched = LastMatched, SustainedMatches = SustainedMatches,
+        Clusters = Clusters.Select(c => new MetronomeCluster { Spectrum = (double[])c.Spectrum.Clone(), MeanPeakDb = c.MeanPeakDb, Count = c.Count }).ToList(),
+    };
 
     [JsonIgnore] public long LastMatched { get; set; }
     [JsonIgnore] public int SustainedMatches { get; set; }

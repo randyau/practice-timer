@@ -30,11 +30,16 @@ public sealed class AudioPipeline
     private bool _learnReported;
     private List<double>? _calibration;
     private volatile MeterSnapshot _snapshot = MeterSnapshot.Empty;
+    private double _peakSince = Dsp.MinDb;
+    private FrameTag _tagSince = FrameTag.Quiet;
+    private bool _framesSince;
+    private MeterSnapshot _lastTaken = MeterSnapshot.Empty;
 
     public AudioPipeline(int sampleRate, PracticeClock clock, DetectorSettings settings, FingerprintBank bank)
     {
         _clock = clock;
         _bank = bank;
+        _bank.BandHiHz = BandSpectrum.EffectiveHiHz(sampleRate);
         _slicer = new FrameSlicer(sampleRate, FrameLength);
         _detector = new LoudnessDetector(sampleRate, settings, bank);
         _auto = new AutoLearner(bank);
@@ -45,7 +50,27 @@ public sealed class AudioPipeline
         };
     }
 
+    /// <summary>The latest frame's view. Fine for tests; the UI should use <see cref="TakeSnapshot"/>.</summary>
     public MeterSnapshot Snapshot => _snapshot;
+
+    /// <summary>
+    /// The meter view since the last call: peak level and the most significant tag over every frame in between.
+    /// Chunks hold several frames and the UI polls on its own schedule, so the latest frame alone would hide short clicks.
+    /// </summary>
+    public MeterSnapshot TakeSnapshot()
+    {
+        lock (_gate)
+        {
+            if (!_framesSince) return _lastTaken;
+            var s = _lastTaken = _snapshot with { Dbfs = _peakSince, Tag = _tagSince };
+            _peakSince = Dsp.MinDb;
+            _tagSince = FrameTag.Quiet;
+            _framesSince = false;
+            return s;
+        }
+    }
+
+    private static int Rank(FrameTag t) => t switch { FrameTag.Active => 3, FrameTag.Metronome => 2, FrameTag.Loud => 1, _ => 0 };
     public GuidedLearnSession? Learn { get { lock (_gate) return _learn; } }
     public bool AutoLearnEnabled { get => _auto.Enabled; set => _auto.Enabled = value; }
 
@@ -54,6 +79,8 @@ public sealed class AudioPipeline
 
     public void StartLearn()
     {
+        // Frames are not reported to the clock while learning, so end any run now rather than bridge the gap.
+        _clock.Interrupt();
         lock (_gate)
         {
             _learn = new GuidedLearnSession(_bank, _now);
@@ -68,6 +95,7 @@ public sealed class AudioPipeline
 
     public void StartCalibration()
     {
+        _clock.Interrupt();
         lock (_gate)
         {
             _calibration = new List<double>();
@@ -90,7 +118,10 @@ public sealed class AudioPipeline
                 if (!learning && _calibration == null) _clock.OnActivity(sample.Time, sample.Active);
                 Calibrate(sample.Dbfs);
                 _snapshot = new MeterSnapshot(sample.Dbfs, _detector.Floor.Floor, _detector.ThresholdDb, sample.Tag,
-                    _detector.Periodicity.CurrentBpm ?? _learn?.Bpm, _calibration != null, _bank.Profiles.Count(p => p.Enabled));
+                    _detector.Periodicity.CurrentBpm ?? _learn?.Bpm, _calibration != null, _bank.EnabledCount);
+                _peakSince = Math.Max(_peakSince, sample.Dbfs);
+                if (Rank(sample.Tag) > Rank(_tagSince)) _tagSince = sample.Tag;
+                _framesSince = true;
             });
         }
         if (finished != null) LearnFinished?.Invoke(finished);

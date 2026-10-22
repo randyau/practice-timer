@@ -38,6 +38,7 @@ public sealed class LoudnessDetector : IActivityDetector
         var loud = _gate.Process(db, Floor.Floor);
         if (!loud) Floor.Add(db);
         var now = frame.End;
+        Periodicity.Expire(now);
 
         if (!_s.MetronomeFilterEnabled) return Emit(now, db, loud, loud, false);
 

@@ -3,7 +3,8 @@ namespace PracticeTimer.Core.Metronome;
 /// <summary>Fallback learner: a steady run of clean, similar ticks becomes a tentative profile.</summary>
 public sealed class AutoLearner
 {
-    private const int Window = 6;
+    /// <summary>Must exceed <see cref="GuidedLearnSession.RequiredTicks"/>: a guess needs more evidence than a taught sound.</summary>
+    public const int Window = GuidedLearnSession.RequiredTicks + 4;
     private readonly FingerprintBank _bank;
     private readonly List<TickSample> _recent = new();
 
