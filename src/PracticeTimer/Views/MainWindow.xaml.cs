@@ -33,16 +33,6 @@ public partial class MainWindow : Window
         Application.Current.SessionEnding += OnSessionEnding;
         // Not from Loaded: that event waits for the dispatcher to go idle, and the timer must not depend on it.
         _vm.Start();
-        Loaded += (_, _) =>
-        {
-            App.Trace("window loaded");
-            if (_vm.Settings.StartMinimized)
-            {
-                // Hiding is only safe when the tray icon is there to bring the window back.
-                if (_vm.Settings.MinimizeToTray) Hide();
-                else WindowState = WindowState.Minimized;
-            }
-        };
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.ElapsedText)) _tray.Tooltip = $"Practice Timer {_vm.ElapsedText}";
@@ -86,6 +76,15 @@ public partial class MainWindow : Window
         var r = MessageBox.Show(this, $"Save this {(int)elapsed.TotalHours:00}:{elapsed.Minutes:00}:{elapsed.Seconds:00} session to history?", "Reset timer",
             MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         return r switch { MessageBoxResult.Yes => true, MessageBoxResult.No => false, _ => null };
+    }
+
+    /// <summary>Called once the window is shown, for the "start minimised" setting.</summary>
+    public void ApplyStartMinimized()
+    {
+        if (!_vm.Settings.StartMinimized) return;
+        // Hiding is only safe when the tray icon is there to bring the window back.
+        if (_vm.Settings.MinimizeToTray) Hide();
+        else WindowState = WindowState.Minimized;
     }
 
     public void Restore()

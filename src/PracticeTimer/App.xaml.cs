@@ -43,6 +43,8 @@ public partial class App : Application
         {
             MainWindow = new Views.MainWindow();
             MainWindow.Show();
+            _started = true;
+            ((Views.MainWindow)MainWindow).ApplyStartMinimized();
         }
         catch (Exception ex)
         {
@@ -67,10 +69,13 @@ public partial class App : Application
     }
 
     /// <summary>A bug must not take a running practice session down with it: log, tell the user once, carry on.</summary>
+    // IsLoaded is not used: that event waits for the dispatcher to go idle and was seen not to arrive.
+    private bool _started;
+
     private void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         e.Handled = true;
-        if (MainWindow is not { IsLoaded: true }) { Fail(e.Exception); return; }
+        if (!_started) { Fail(e.Exception); return; }
         Log(e.Exception);
         if (_crashShown) return; // a repeating fault must not stack up message boxes
         _crashShown = true;
