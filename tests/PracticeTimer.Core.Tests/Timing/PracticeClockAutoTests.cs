@@ -138,4 +138,89 @@ public class PracticeClockAutoTests
         c.Tick();
         Assert.Equal(1, fired);
     }
+
+    [Fact]
+    public void TimeRunningBackwardsEndsTheRunWithoutGoingNegative()
+    {
+        var c = Make();
+        c.StartAuto();
+        Feed(c, 600, true);
+        _t = 0; // a new audio pipeline restarts its timestamps
+        Feed(c, 2, true);
+        Feed(c, 6, false);
+        Assert.Equal(ClockState.PausedQuiet, c.State);
+        Assert.InRange(c.Elapsed.TotalSeconds, 598, 603);
+    }
+
+    [Fact]
+    public void InterruptCommitsToLastActiveAndForgetsPendingStart()
+    {
+        var c = Make();
+        c.StartAuto();
+        Feed(c, 10, true);
+        Feed(c, 2, false);
+        c.Interrupt();
+        Assert.Equal(ClockState.PausedQuiet, c.State);
+        Assert.InRange(c.Elapsed.TotalSeconds, 9.9, 10.1);
+        Feed(c, 0.5, true); // shorter than StartDelay: must not resume from an old candidate
+        Assert.Equal(ClockState.PausedQuiet, c.State);
+    }
+
+    [Fact]
+    public void InterruptedGapIsNotCreditedWhenPlayingResumes()
+    {
+        var c = Make();
+        c.StartAuto();
+        Feed(c, 0.5, true);
+        c.Interrupt();
+        _t += 20; // learn / calibration period, no samples reported
+        Feed(c, 3, true);
+        Assert.InRange(c.Elapsed.TotalSeconds, 2.9, 3.1);
+    }
+
+    [Fact]
+    public void ManualPauseDropsTrailingQuiet()
+    {
+        var c = Make();
+        c.StartAuto();
+        Feed(c, 10, true);
+        Feed(c, 3, false);
+        c.Pause();
+        Assert.InRange(c.Elapsed.TotalSeconds, 9.9, 10.1);
+    }
+
+    [Fact]
+    public void StartFromAutoPlayingKeepsTheAutoTime()
+    {
+        var c = Make();
+        c.StartAuto();
+        Feed(c, 10, true);
+        c.Start();
+        Assert.InRange(c.Elapsed.TotalSeconds, 9.9, 10.1);
+    }
+
+    [Fact]
+    public void GoalDoesNotFireOnTrailingQuiet()
+    {
+        var c = Make();
+        var fired = 0;
+        c.GoalReached += () => fired++;
+        c.Goal = TimeSpan.FromSeconds(11);
+        c.StartAuto();
+        Feed(c, 10, true);
+        Feed(c, 4, false);
+        c.Tick();
+        Assert.Equal(0, fired);
+    }
+
+    [Fact]
+    public void StateChangedHandlerMayCallBackIntoTheClock()
+    {
+        var c = Make();
+        TimeSpan seen = TimeSpan.MinValue;
+        c.StateChanged += _ => { seen = c.Elapsed; };
+        var t = Task.Run(() => { c.StartAuto(); Feed(c, 3, true); });
+        Assert.True(t.Wait(2000));
+        Assert.NotEqual(TimeSpan.MinValue, seen);
+    }
 }
