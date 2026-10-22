@@ -16,7 +16,9 @@ namespace PracticeTimer.ViewModels;
 
 public sealed class MainViewModel : ObservableBase, IDisposable
 {
-    public static readonly string DataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PracticeTimer");
+    /// <summary>Where settings, history and logs live. PRACTICETIMER_DATA points a test run at its own folder.</summary>
+    public static readonly string DataDir = Environment.GetEnvironmentVariable("PRACTICETIMER_DATA")
+        ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PracticeTimer");
 
     private readonly SettingsStore _settingsStore = new(Path.Combine(DataDir, "settings.json"));
     private readonly MetronomeStore _metronomeStore = new(Path.Combine(DataDir, "metronomes.json"));

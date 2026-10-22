@@ -21,6 +21,7 @@ SDK 10 is pinned in `global.json`; the app targets `net8.0-windows` and is cross
   metronome detection and learning, persistence.
 - `src/PracticeTimer` - WPF app: NAudio (WASAPI) capture, view models, windows.
 - `tests/PracticeTimer.Core.Tests` - xUnit tests driven by synthetic audio (`Signals/SignalGen.cs`) and by recordings in `Fixtures/`.
+- `scripts/smoke-win.sh` - launches the published exe on Windows in a temporary data folder and checks it starts, lists microphones, ticks and logs no errors.
 - `tools/Replay` - replays a .wav through the real pipeline and prints what it decided (`dotnet run --project tools/Replay -- <file.wav> --auto`).
 
 ## Behaviour at a glance
