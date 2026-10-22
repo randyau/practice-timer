@@ -79,7 +79,7 @@ A family usually has one or two metronomes, so each only has to be taught once.
 #### Guided "Learn metronome" flow (the primary way to learn)
 1. The student or parent starts the metronome, then presses **Learn metronome** (needs the Metronome filter on).
 2. `Learning metronome... n/8 ticks. Let it run on its own.` shows with a progress ring. The meter colours ticks the filter recognises. Time is not counted while learning, and sustained sound is rejected.
-3. The app listens until it has ≥ 8 clean ticks over ≥ 4 s with consistent fingerprints and a steady interval (±15%), or times out at 20 s. While learning, the detector is more sensitive (6 dB over the floor, down to −70 dBFS) and accepts ticks up to 400 ms long, because a phone speaker is quiet and its click rings on. One unbroken second of sustained sound ends it with `Too much other sound`.
+3. The app listens until it has ≥ 8 clean ticks over ≥ 4 s with consistent fingerprints and a steady interval (±15%), or times out at 20 s. While learning, the detector is more sensitive (8 dB over the larger of the noise floor and the last two seconds' background level, down to −70 dBFS, and never less strict than the normal trigger), so a steady hum just under the normal trigger is not read as one endless sound, and it accepts ticks up to 400 ms long, because a phone speaker is quiet and its click rings on. One unbroken second of sustained sound ends it with `Too much other sound`.
 4. **Success:** chime, green check, `Metronome learned (BPM ~72)`; the profile is **locked** and saved.
 5. **Failure:** `Didn't hear a steady metronome` (timeout) or `Too much other sound. Try again.` Nothing is stored.
 6. The button reads **Cancel learning** while learning and is always usable then. Learning again afterwards adds a profile, which is how a second metronome is taught. A mic change or loss mid-learn discards the learn with a message.
@@ -105,6 +105,7 @@ Things the app must keep doing, because earlier versions got them wrong:
 - **Closing saves.** A session of at least 3 s is saved automatically on window close and Windows logoff or shutdown (no prompt), then the clock is reset so it can't be saved twice.
 - **Single instance.** A second launch asks the running instance to show its window and exits (two copies would overwrite each other's history). The second launch builds no window of its own.
 - **Startup failure.** If the main window can't be created the error is logged and shown and the process exits; a windowless instance would block every later launch.
+- **Startup trace.** `%AppData%\PracticeTimer\trace.log` is rewritten on each launch with a few lines (startup, timer started, microphones found, first tick, and the outcome of each guided learn). It exists to diagnose a window that comes up dead. The app does not depend on the window's `Loaded` event, which was seen not to arrive; the timer starts from the constructor.
 - **Unhandled errors.** UI exceptions are appended to `%AppData%\PracticeTimer\error.log`; the user is told once and the app keeps running. Capture-thread errors are logged too.
 
 ## Threading and data ownership

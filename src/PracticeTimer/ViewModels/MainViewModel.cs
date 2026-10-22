@@ -400,6 +400,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
 
     private void OnLearnFinished(GuidedLearnSession s)
     {
+        App.Trace($"learn finished: {s.Status}, {s.TickCount} ticks, {(s.Bpm is { } b ? $"{b:0} BPM" : "no tempo")}");
         switch (s.Status)
         {
             case LearnStatus.Success when s.Result != null:

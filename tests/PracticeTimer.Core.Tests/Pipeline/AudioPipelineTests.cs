@@ -74,6 +74,18 @@ public class AudioPipelineTests
     }
 
     [Fact]
+    public void GuidedLearnIgnoresSteadyBackgroundJustUnderTheNormalTrigger()
+    {
+        var done = new List<LearnStatus>();
+        _p.LearnFinished += s => done.Add(s.Status);
+        Feed(Silence(3), room: false);
+        Feed(Tone(200, 3, -62), room: false); // the floor still remembers the silence, so it sits well below this
+        _p.StartLearn();
+        Feed(Mix(Tone(200, 15, -62), ClickTrain(80, 15, () => Click(-40))), room: false);
+        Assert.Equal(new[] { LearnStatus.Success }, done);
+    }
+
+    [Fact]
     public void ClockIgnoresSoundWhileLearning()
     {
         _clock.StartAuto();

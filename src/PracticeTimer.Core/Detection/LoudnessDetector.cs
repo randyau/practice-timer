@@ -40,18 +40,51 @@ public sealed class LoudnessDetector : IActivityDetector
     public bool Learning { get; set; }
 
     private static readonly TimeSpan LearnShortMax = TimeSpan.FromMilliseconds(400);
-    private const double LearnMarginDb = 6, LearnAbsoluteMinDb = -70;
+    private const double LearnMarginDb = 8, LearnAbsoluteMinDb = -70;
+
+    // The last two seconds of levels, so a learn can tell a tick from a steady background that sits just under the normal trigger.
+    private const int LocalFrames = 80;
+    private readonly double[] _local = new double[LocalFrames];
+    private int _localCount, _localNext;
+
+    /// <summary>A low percentile of recent levels: the background between ticks, however far above the floor it sits.</summary>
+    private double LocalBackground(double db)
+    {
+        _local[_localNext] = db;
+        _localNext = (_localNext + 1) % LocalFrames;
+        _localCount = Math.Min(LocalFrames, _localCount + 1);
+        Span<double> sorted = stackalloc double[LocalFrames];
+        _local.AsSpan(0, _localCount).CopyTo(sorted);
+        sorted = sorted[.._localCount];
+        sorted.Sort();
+        return sorted[(int)(_localCount * 0.3)];
+    }
 
     public NoiseFloorEstimator Floor { get; } = new();
     public PeriodicityTracker Periodicity { get; } = new();
 
     public ActivitySample Process(AudioFrame frame)
     {
-        _gate.MarginDb = Learning ? Math.Min(_s.MarginDb, LearnMarginDb) : _s.MarginDb;
-        _gate.AbsoluteMinDb = Learning ? Math.Min(_s.AbsoluteMinDb, LearnAbsoluteMinDb) : _s.AbsoluteMinDb;
-        _bursts.ShortMax = Learning ? LearnShortMax : _s.ShortBurstMax;
         var db = Dsp.Dbfs(frame.Samples);
-        var loud = _gate.Process(db, Floor.Floor);
+        var background = LocalBackground(db);
+        var gateFloor = Floor.Floor;
+        _gate.MarginDb = _s.MarginDb;
+        _gate.AbsoluteMinDb = _s.AbsoluteMinDb;
+        _bursts.ShortMax = Learning ? LearnShortMax : _s.ShortBurstMax;
+        if (Learning)
+        {
+            // More sensitive than normal, but measured from the background actually present, and never less strict
+            // than the normal trigger would be: a steady hum just under it must not read as one endless sound.
+            var learnFloor = Math.Max(gateFloor, background);
+            var learnEnter = Math.Max(learnFloor + LearnMarginDb, LearnAbsoluteMinDb);
+            if (learnEnter < _gate.EnterThreshold(gateFloor))
+            {
+                _gate.MarginDb = LearnMarginDb;
+                _gate.AbsoluteMinDb = LearnAbsoluteMinDb;
+                gateFloor = learnFloor;
+            }
+        }
+        var loud = _gate.Process(db, gateFloor);
         var now = frame.End;
         // The floor is frozen while the detector is active (including its hangover), so rests inside a phrase
         // can't drag it down to the instrument's own decay.
