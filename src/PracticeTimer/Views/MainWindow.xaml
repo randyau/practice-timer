@@ -59,7 +59,7 @@
         <Grid Grid.Row="4" Margin="0,16,0,0">
             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
             <TextBlock Text="{Binding GoalText}" VerticalAlignment="Center" Width="120" />
-            <ProgressBar Grid.Column="1" Height="12" Maximum="1" Value="{Binding GoalProgress}" />
+            <ProgressBar Grid.Column="1" Height="12" Maximum="1" Value="{Binding GoalProgress, Mode=OneWay}" />
         </Grid>
 
         <Grid Grid.Row="5" Margin="0,14,0,0">
