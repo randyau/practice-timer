@@ -36,6 +36,24 @@ public partial class App : Application
         }) { IsBackground = true, Name = "show-signal" };
         waiter.Start();
         base.OnStartup(e);
+        try
+        {
+            MainWindow = new Views.MainWindow();
+            MainWindow.Show();
+        }
+        catch (Exception ex)
+        {
+            // Without this the process would live on with no window and block every later launch.
+            Fail(ex);
+        }
+    }
+
+    /// <summary>The app can't start: say why, then exit so the next launch isn't blocked by a windowless process.</summary>
+    private void Fail(Exception ex)
+    {
+        Log(ex);
+        MessageBox.Show($"Practice Timer couldn't start.\n\n{ex.Message}\n\nDetails were written to {LogPath}", "Practice Timer", MessageBoxButton.OK, MessageBoxImage.Error);
+        Shutdown(1);
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -48,8 +66,9 @@ public partial class App : Application
     /// <summary>A bug must not take a running practice session down with it: log, tell the user once, carry on.</summary>
     private void OnUiException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        Log(e.Exception);
         e.Handled = true;
+        if (MainWindow is not { IsLoaded: true }) { Fail(e.Exception); return; }
+        Log(e.Exception);
         if (_crashShown) return; // a repeating fault must not stack up message boxes
         _crashShown = true;
         MessageBox.Show($"Something went wrong, but the timer is still running.\n\n{e.Exception.Message}\n\nDetails were written to {LogPath}",
@@ -58,7 +77,7 @@ public partial class App : Application
 
     private static string LogPath => Path.Combine(ViewModels.MainViewModel.DataDir, "error.log");
 
-    private static void Log(Exception? ex)
+    internal static void Log(Exception? ex)
     {
         try
         {
@@ -69,7 +88,7 @@ public partial class App : Application
     }
 
     /// <summary>Follows the Windows app-mode setting when <paramref name="theme"/> is "System".</summary>
-    public static bool IsDark(string theme) => theme switch
+    private static bool IsDark(string theme) => theme switch
     {
         "Dark" => true,
         "Light" => false,

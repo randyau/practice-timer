@@ -152,4 +152,37 @@ public class AudioPipelineTests
         Feed(Silence(1, noiseDb: -60, seed: 4), room: false);
         Assert.InRange(_p.Snapshot.FloorDb, floor - 1, floor + 1);
     }
+
+    [Fact]
+    public void SteadyRoomNoiseThatStartsMidSessionStopsCountingAsPlaying()
+    {
+        _clock.StartAuto();
+        Feed(Silence(10, noiseDb: -75), room: false);
+        Feed(Silence(100, noiseDb: -50, seed: 7), room: false);
+        Assert.Equal(ClockState.PausedQuiet, _clock.State);
+        Assert.InRange(_clock.Elapsed.TotalSeconds, 25, 60);
+        Assert.True(_p.Snapshot.FloorDb > -60);
+    }
+
+    [Fact]
+    public void LongNoteWithDynamicsIsNotMistakenForNoise()
+    {
+        _clock.StartAuto();
+        var swell = Concat(Enumerable.Range(0, 60).Select(i => Note(440, 1, -30 + 14 * Math.Abs(Math.Sin(i / 4.0)))).ToArray());
+        Feed(Concat(Silence(3), swell, Silence(1)));
+        Assert.True(_clock.Elapsed.TotalSeconds > 58);
+    }
+
+    [Fact]
+    public void CalibrationCanBeCarriedToANewPipeline()
+    {
+        _p.StartCalibration();
+        Feed(Silence(4, noiseDb: -45), room: false);
+        var cal = _p.Calibration;
+        Assert.NotNull(cal);
+        var next = new AudioPipeline(Rate, _clock, new DetectorSettings(), _bank, cal);
+        foreach (var c in Chunks(Silence(1, noiseDb: -45), 480)) next.Push(c);
+        Assert.InRange(next.Snapshot.FloorDb, -48, -42);
+        Assert.NotNull(next.Calibration);
+    }
 }

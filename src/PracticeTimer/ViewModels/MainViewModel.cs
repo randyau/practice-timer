@@ -35,11 +35,15 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     private DateTime _flashUntil;
     private DateTime _checkUntil;
     private bool _isAuto;
-    private bool _goalAnnounced;
     private bool _settingsDirty;
     private DateTime _settingsDueAt;
     private DateTime _todayAt = DateTime.MinValue;
+    /// <summary>No audio for this long after data has been flowing means the device has stalled.</summary>
     private static readonly TimeSpan MicSilenceLimit = TimeSpan.FromSeconds(2.5);
+    /// <summary>Some devices (a headset switching profile) take a while to deliver their first block.</summary>
+    private static readonly TimeSpan MicFirstDataLimit = TimeSpan.FromSeconds(10);
+    /// <summary>Calibrated floor per microphone, so reopening the same one doesn't lose it.</summary>
+    private readonly Dictionary<string, NoiseCalibration> _noise = new();
 
     public MainViewModel()
     {
@@ -51,13 +55,15 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         Bank.Load(_metronomeStore.Load());
         Instruments = new ObservableCollection<string>(History.Instruments);
         History.SaveFailed += e => Flash("Couldn't save history: " + e.Message, 15);
-        Clock.GoalReached += () => Application.Current.Dispatcher.BeginInvoke(OnGoalReached);
+        Clock.GoalReached += OnGoalReached; // raised from Tick, which runs on the UI thread
         _isAuto = Settings.Mode != "Manual";
         Instrument = Settings.LastInstrument ?? "";
-        ApplySettings();
+        ApplyToRuntime(); // not saved: nothing has changed, and a file that failed to load must stay untouched
         _timer.Tick += (_, _) => Refresh();
         _watcher.Changed += () => Application.Current.Dispatcher.BeginInvoke(RefreshDevices);
-        _capture.Stopped += ex => Application.Current.Dispatcher.BeginInvoke(() => OnCaptureStopped(ex));
+        // NAudio raises this on the UI context already; MicCapture only raises it for the current capture, so no extra hop
+        // that could let a stale event hit a newer capture.
+        _capture.Stopped += ex => { if (Application.Current.Dispatcher.CheckAccess()) OnCaptureStopped(ex); else Application.Current.Dispatcher.BeginInvoke(() => OnCaptureStopped(ex)); };
     }
 
     public AppSettings Settings { get; }
@@ -118,7 +124,6 @@ public sealed class MainViewModel : ObservableBase, IDisposable
             {
                 Settings.GoalMinutes = value;
                 Clock.Goal = value > 0 ? TimeSpan.FromMinutes(value) : null;
-                _goalAnnounced = false;
                 SaveSettingsSoon();
             }
             Raise(); // also re-shows the clamped value if the typed one was out of range
@@ -143,9 +148,9 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         get => _selectedDevice;
         set
         {
-            if (!Set(ref _selectedDevice, value) || value == null) return;
+            // The combo box pushes null whenever the device list is rebuilt; that is not a choice.
+            if (value == null || !Set(ref _selectedDevice, value)) return;
             Settings.DeviceId = value.Id;
-            Settings.DeviceName = value.Name;
             _micNotice = null;
             SaveSettingsNow();
             StartCapture();
@@ -164,11 +169,9 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         var previous = _selectedDevice;
         List<MicDevice> list;
         try { list = MicCapture.List(); } catch (Exception) { list = new(); }
-        if (!list.Select(d => d.Id).SequenceEqual(Devices.Select(d => d.Id)))
-        {
-            Devices.Clear();
-            foreach (var d in list) Devices.Add(d);
-        }
+        // Diff rather than rebuild: clearing the list makes the combo box drop its selection.
+        foreach (var gone in Devices.Where(d => list.All(n => n.Id != d.Id)).ToList()) Devices.Remove(gone);
+        foreach (var added in list.Where(n => Devices.All(d => d.Id != n.Id))) Devices.Add(added);
         MicDevice? Find(string? id) => id == null ? null : Devices.FirstOrDefault(d => d.Id == id);
 
         var lost = previous != null && Find(previous.Id) == null;
@@ -188,7 +191,11 @@ public sealed class MainViewModel : ObservableBase, IDisposable
             _selectedDevice = pick;
             Raise(nameof(SelectedDevice));
             StartCapture();
-            if (lost && _pipeline != null && _micNotice != null) _micNotice += $" Now listening with {pick.Name}. Press Start to continue.";
+            if (_pipeline != null && _micNotice != null)
+            {
+                // Back on the remembered microphone the old warning no longer applies; on a fallback it says where we are.
+                _micNotice = pick.Id == Settings.DeviceId ? null : lost ? _micNotice + $" Now listening with {pick.Name}. Press Start to continue." : _micNotice;
+            }
         }
     }
 
@@ -196,14 +203,20 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     {
         // Each pipeline numbers its audio from zero, so end any auto run before the old timeline goes away.
         Clock.Interrupt();
+        RememberCalibration();
         _pipeline = null;
         try
         {
             var id = _selectedDevice!.Id;
+            if (IsLearning) Flash("Learning stopped because the microphone changed.", 8);
             AudioPipeline? pipeline = null;
             var rate = _capture.Start(id, samples => pipeline?.Push(samples));
-            pipeline = new AudioPipeline(rate, Clock, _detector, Bank) { AutoLearnEnabled = Settings.AutoLearnMetronome };
-            pipeline.LearnFinished += s => Application.Current.Dispatcher.BeginInvoke(() => OnLearnFinished(s));
+            _noiseMicId = id;
+            pipeline = new AudioPipeline(rate, Clock, _detector, Bank, _noise.TryGetValue(id, out var cal) ? cal : null)
+            { AutoLearnEnabled = Settings.AutoLearnMetronome };
+            var mine = pipeline;
+            // A learn finishing on a pipeline that has since been replaced belongs to the old microphone.
+            pipeline.LearnFinished += s => Application.Current.Dispatcher.BeginInvoke(() => { if (ReferenceEquals(mine, _pipeline)) OnLearnFinished(s); });
             _pipeline = pipeline;
             _micError = null;
         }
@@ -216,17 +229,20 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     /// <summary>Pauses the timer, drops the dead pipeline and leaves a warning that stays until the user acts.</summary>
     private void HandleMicLost(string reason)
     {
-        var running = Clock.State is ClockState.ManualRunning or ClockState.Listening or ClockState.Playing or ClockState.PausedQuiet;
+        RememberCalibration();
+        // Only auto mode depends on the microphone; a manual stopwatch keeps running.
+        var auto = Clock.State is ClockState.Listening or ClockState.Playing or ClockState.PausedQuiet;
         Clock.Interrupt();
-        if (running) Clock.Pause();
+        if (auto) Clock.Pause();
         _capture.Stop();
         _pipeline = null;
-        _micNotice = running ? reason + " The timer is paused." : reason;
+        _micNotice = auto ? reason + " The timer is paused." : reason;
     }
 
     private void OnCaptureStopped(Exception? ex)
     {
         if (_pipeline == null) return;
+        if (ex != null) App.Log(ex); // the audio thread's own failures never reach the unhandled-exception handler
         HandleMicLost(ex == null ? "The microphone stopped." : "Microphone lost.");
         RefreshDevices();
     }
@@ -243,9 +259,22 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     }
 
     /// <summary>Called after resume; the capture device often needs reopening.</summary>
-    public void OnResume() => Application.Current.Dispatcher.BeginInvoke(RefreshDevices);
+    public void OnResume() => Application.Current.Dispatcher.BeginInvoke(() =>
+    {
+        RefreshDevices();
+        if (_selectedDevice != null && _pipeline != null) StartCapture(); // the old stream is usually dead after sleep
+    });
 
-    public void ApplySettings()
+    /// <summary>Keeps the pipeline's calibrated floor for the current microphone, for when it is reopened.</summary>
+    private void RememberCalibration()
+    {
+        if (_pipeline?.Calibration is { } cal && _noiseMicId != null) _noise[_noiseMicId] = cal;
+    }
+
+    private string? _noiseMicId;
+
+    /// <summary>Pushes settings into the clock and detector.</summary>
+    private void ApplyToRuntime()
     {
         _detector.MarginDb = Settings.SensitivityMarginDb;
         _detector.AbsoluteMinDb = Settings.MinTriggerDb;
@@ -255,6 +284,13 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         Clock.StopDelay = TimeSpan.FromSeconds(Settings.StopDelaySeconds);
         Clock.Goal = Settings.GoalMinutes > 0 ? TimeSpan.FromMinutes(Settings.GoalMinutes) : null;
         if (_pipeline != null) _pipeline.AutoLearnEnabled = Settings.AutoLearnMetronome;
+        if (!Settings.MetronomeFilterEnabled) _pipeline?.CancelLearn(); // learning needs the filter
+    }
+
+    /// <summary>Applies and saves settings after the user pressed OK in the settings window.</summary>
+    public void ApplySettings()
+    {
+        ApplyToRuntime();
         SaveSettingsNow();
         Raise(nameof(GoalMinutes));
         SettingsApplied?.Invoke();
@@ -273,6 +309,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     /// <summary>Returns false if the user cancelled.</summary>
     public bool Reset()
     {
+        Clock.Interrupt(); // what is saved and shown is the credited time, without trailing quiet
         if (Clock.Elapsed.TotalSeconds >= 3)
         {
             bool? answer = ConfirmSave != null ? ConfirmSave(Clock.Elapsed) : false;
@@ -280,9 +317,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
             if (answer == true) SaveSession();
         }
         Clock.Reset();
-        _goalAnnounced = false;
         Note = "";
-        Raise(nameof(Note));
         return true;
     }
 
@@ -299,7 +334,13 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     /// <summary>Saves a session worth keeping and writes pending settings. For window close and logoff, where asking isn't possible.</summary>
     public void SaveOnExit()
     {
-        if (Clock.Elapsed.TotalSeconds >= 3) SaveSession();
+        Clock.Interrupt();
+        if (Clock.Elapsed.TotalSeconds >= 3)
+        {
+            SaveSession();
+            Clock.Reset(); // saved: if a cancelled shutdown leaves the app open, a later close must not save it again
+            Note = "";
+        }
         FlushSettings();
     }
 
@@ -331,8 +372,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
 
     public void ForgetAutoLearned()
     {
-        Bank.ClearTentative();
-        SaveMetronomes();
+        Bank.ClearTentative(); // tentative profiles are never saved, so there is nothing to write
     }
 
     public void SaveMetronomes() => TrySave(() => _metronomeStore.Save(Bank.Profiles), "metronomes");
@@ -422,8 +462,6 @@ public sealed class MainViewModel : ObservableBase, IDisposable
 
     private void OnGoalReached()
     {
-        if (_goalAnnounced) return;
-        _goalAnnounced = true;
         if (Settings.ChimeEnabled) System.Media.SystemSounds.Exclamation.Play();
     }
 
@@ -432,10 +470,10 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     {
         Clock.Tick();
         if (_settingsDirty && DateTime.Now >= _settingsDueAt) FlushSettings();
-        if (_pipeline != null && _capture.IsRunning && _capture.SilenceAge > MicSilenceLimit)
+        if (_pipeline != null && _capture.IsRunning && _capture.SilenceAge > (_capture.HasData ? MicSilenceLimit : MicFirstDataLimit))
         {
             HandleMicLost("The microphone stopped sending audio.");
-            _micError = "Microphone not responding. Pick it again or press Start to retry.";
+            _micError = "Microphone not responding. Press Start to retry.";
         }
         var e = Clock.Elapsed;
         ElapsedText = $"{(int)e.TotalHours:00}:{e.Minutes:00}:{e.Seconds:00}";
@@ -447,7 +485,7 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         IsCalibrating = snap.Calibrating;
         LearnProgress = learn is { IsDone: false } ? Math.Min(1.0, (double)learn.TickCount / GuidedLearnSession.RequiredTicks) : 0;
         LearnCheck = !IsLearning && DateTime.Now < _checkUntil;
-        CanLearn = _pipeline != null && Settings.MetronomeFilterEnabled && !IsCalibrating;
+        CanLearn = IsLearning || (_pipeline != null && Settings.MetronomeFilterEnabled && !IsCalibrating); // cancelling is always possible
         Level = Scale(snap.Dbfs);
         Threshold = Scale(snap.ThresholdDb);
         Floor = Scale(snap.FloorDb);
@@ -469,16 +507,15 @@ public sealed class MainViewModel : ObservableBase, IDisposable
                 _ => "Paused (quiet)",
             });
 
-        var profiles = Bank.Profiles;
-        var saved = profiles.Count(p => p.Locked);
-        var other = profiles.Count(p => p.Locked && MetronomeStore.LearnedOnDifferentMic(p, SelectedDevice?.Id));
-        MetronomeText = profiles.Count == 0 ? "No metronome learned"
-            : $"Metronomes: {saved} saved" + (profiles.Count > saved ? " + Metronome (auto)" : "") + (other > 0 ? $" ({other} learned on another mic)" : "");
+        var (saved, tentative, other) = Bank.Summary(SelectedDevice?.Id);
+        MetronomeText = saved + tentative == 0 ? "No metronome learned"
+            : $"Metronomes: {saved} saved" + (tentative > 0 ? " + Metronome (auto)" : "") + (other > 0 ? $" ({other} learned on another mic)" : "");
 
         if (Clock.Goal is { } goal)
         {
-            GoalProgress = Math.Min(1, e.TotalSeconds / goal.TotalSeconds);
-            GoalText = e >= goal ? "Goal reached!" : $"{(goal - e).TotalMinutes:0.#} min to go";
+            var credited = Clock.CreditedElapsed; // trailing quiet may still be rolled back, so don't announce on it
+            GoalProgress = Math.Min(1, credited.TotalSeconds / goal.TotalSeconds);
+            GoalText = credited >= goal ? "Goal reached!" : $"{(goal - credited).TotalMinutes:0.#} min to go";
         }
         else { GoalProgress = 0; GoalText = "No goal set"; }
 

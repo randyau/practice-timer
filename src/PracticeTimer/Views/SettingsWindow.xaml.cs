@@ -42,6 +42,7 @@ public partial class SettingsWindow : Window
         DataContext = _working = Clone(vm.Settings);
         foreach (var p in vm.Bank.Profiles.Where(p => p.Locked)) _items.Add(new MetronomeItem(p, vm.SelectedDevice?.Id));
         MetroList.ItemsSource = _items;
+        Closed += (_, _) => DataContext = null; // AppSettings isn't INPC; a live binding to it would keep this window alive
     }
 
     private readonly AppSettings _working;

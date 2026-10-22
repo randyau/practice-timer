@@ -38,9 +38,15 @@ public sealed class FingerprintBank
         get { lock (_gate) return _profiles.Select(p => p.Clone()).ToArray(); }
     }
 
-    public int EnabledCount
+    /// <summary>Counts for the status line, taken without copying profiles.</summary>
+    public (int Saved, int Tentative, int OtherMic) Summary(string? currentMicId)
     {
-        get { lock (_gate) return _profiles.Count(p => p.Enabled); }
+        lock (_gate)
+        {
+            var saved = _profiles.Count(p => p.Locked);
+            return (saved, _profiles.Count - saved,
+                _profiles.Count(p => p.Locked && p.MicDeviceId != null && currentMicId != null && p.MicDeviceId != currentMicId));
+        }
     }
 
     public void Load(IEnumerable<MetronomeProfile> profiles)
@@ -79,7 +85,7 @@ public sealed class FingerprintBank
     {
         lock (_gate)
         {
-            candidate.BandHiHz = BandHiHz;
+            if (candidate.BandHiHz <= 0) candidate.BandHiHz = BandHiHz;
             var existing = _profiles.FirstOrDefault(p => SameLayout(p)
                 && p.Clusters.Any(a => candidate.Clusters.Any(b => BandSpectrum.Cosine(a.Spectrum, b.Spectrum) >= MergeThreshold)));
             if (existing != null)
@@ -112,6 +118,7 @@ public sealed class FingerprintBank
             c.Count += n.Count;
         }
         if (from.Locked && !into.Locked) { into.Locked = true; into.Name = from.Name; }
+        if (from.Locked) into.Enabled = true; // teaching it again means it should be in use
         if (from.MinBpm > 0) into.MinBpm = into.MinBpm > 0 ? Math.Min(into.MinBpm, from.MinBpm) : from.MinBpm;
         into.MaxBpm = Math.Max(into.MaxBpm, from.MaxBpm);
     }
@@ -149,7 +156,7 @@ public sealed class FingerprintBank
                 if (e.Remove) { _profiles.RemoveAll(p => p.Id == e.Id); continue; }
                 var p = _profiles.FirstOrDefault(x => x.Id == e.Id);
                 if (p == null) continue;
-                p.Name = e.Name;
+                if (!string.IsNullOrWhiteSpace(e.Name)) p.Name = e.Name.Trim();
                 p.Enabled = e.Enabled;
             }
         }
@@ -163,11 +170,5 @@ public sealed class FingerprintBank
     public void ClearTentative()
     {
         lock (_gate) _profiles.RemoveAll(p => !p.Locked);
-    }
-
-    /// <summary>Forgets every profile, saved ones included.</summary>
-    public void Clear()
-    {
-        lock (_gate) _profiles.Clear();
     }
 }

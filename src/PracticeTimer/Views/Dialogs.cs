@@ -14,6 +14,8 @@ public static class Dialogs
             WindowStartupLocation = owner is { IsVisible: true } ? WindowStartupLocation.CenterOwner : WindowStartupLocation.CenterScreen,
             ShowInTaskbar = false, FontFamily = new System.Windows.Media.FontFamily("Segoe UI"), Content = content,
         };
+        w.SetResourceReference(Control.BackgroundProperty, "Bg");
+        w.SetResourceReference(Control.ForegroundProperty, "Fg");
         if (owner is { IsVisible: true }) w.Owner = owner;
         return w;
     }

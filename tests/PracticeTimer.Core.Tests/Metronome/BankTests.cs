@@ -220,4 +220,37 @@ public class FingerprintBankTests
         Volatile.Write(ref stop, true);
         Assert.True(audio.Wait(5000));
     }
+
+    [Fact]
+    public void TeachingADisabledMetronomeAgainEnablesIt()
+    {
+        var b = new FingerprintBank();
+        var id = b.TryAdd(Profile(2000)).Profile.Id;
+        b.ApplyEdits(new[] { new ProfileEdit(id, "m", Enabled: false, Remove: false) });
+        var r = b.TryAdd(Profile(2000));
+        Assert.Equal(AddKind.Merged, r.Kind);
+        Assert.True(Assert.Single(b.Profiles).Enabled);
+        Assert.True(Matches(b, 2000));
+    }
+
+    [Fact]
+    public void BlankRenameIsIgnored()
+    {
+        var b = new FingerprintBank();
+        var id = b.TryAdd(Profile(2000, "keep")).Profile.Id;
+        b.ApplyEdits(new[] { new ProfileEdit(id, "  ", true, false) });
+        Assert.Equal("keep", b.Profiles[0].Name);
+    }
+
+    [Fact]
+    public void SummaryCountsSavedTentativeAndOtherMic()
+    {
+        var b = new FingerprintBank();
+        var saved = Profile(2000, "s");
+        saved.MicDeviceId = "micA";
+        b.TryAdd(saved);
+        b.TryAdd(Profile(500, "t", locked: false));
+        Assert.Equal((1, 1, 1), b.Summary("micB"));
+        Assert.Equal((1, 1, 0), b.Summary("micA"));
+    }
 }

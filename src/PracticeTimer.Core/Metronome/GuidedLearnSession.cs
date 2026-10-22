@@ -1,6 +1,6 @@
 namespace PracticeTimer.Core.Metronome;
 
-public enum LearnStatus { Idle, Learning, Success, AlreadyKnown, Timeout, TooMuchSound, BankFull, Cancelled }
+public enum LearnStatus { Learning, Success, AlreadyKnown, Timeout, TooMuchSound, BankFull, Cancelled }
 
 /// <summary>User-initiated metronome learning. Driven only by frame time, so it is deterministic.</summary>
 public sealed class GuidedLearnSession

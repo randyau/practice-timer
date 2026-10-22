@@ -9,7 +9,8 @@ public sealed class MetronomeStore
     private readonly JsonStore<Data> _store;
     public MetronomeStore(string path) => _store = new JsonStore<Data>(path);
 
-    public List<MetronomeProfile> Load() => _store.Load().Profiles;
+    /// <summary>Loads saved metronomes, dropping any entry that is malformed.</summary>
+    public List<MetronomeProfile> Load() => (_store.Load().Profiles ?? new()).Where(p => p != null && p.IsUsable()).ToList();
 
     /// <summary>Only user-taught (locked) metronomes are persisted; auto-learned ones are session-only.</summary>
     public void Save(IEnumerable<MetronomeProfile> profiles) =>

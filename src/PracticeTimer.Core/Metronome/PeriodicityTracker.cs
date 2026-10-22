@@ -62,10 +62,4 @@ public sealed class PeriodicityTracker
         _locked = true;
         return true;
     }
-
-    public void Reset()
-    {
-        _recent.Clear();
-        _locked = false;
-    }
 }

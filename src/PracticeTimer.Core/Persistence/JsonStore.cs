@@ -10,7 +10,8 @@ namespace PracticeTimer.Core.Persistence;
 /// <item>Older version: <paramref name="migrate"/> converts it when given; otherwise the data is read as-is, which suits additive changes.</item>
 /// <item>Newer version (written by a later build): set aside untouched, defaults returned.</item>
 /// <item>Corrupt: set aside, defaults returned.</item>
-/// <item>Read blocked after retries (another process has it open): defaults returned and a copy is kept, so the original is never lost.</item>
+/// <item>Read blocked after retries (another process has it open): defaults returned, and saving is refused (<see cref="Save"/> throws)
+/// until the app is restarted, so the unreadable original is never overwritten with defaults.</item>
 /// </list>
 /// </summary>
 public sealed class JsonStore<T> where T : new()
@@ -20,6 +21,7 @@ public sealed class JsonStore<T> where T : new()
     private readonly string _path;
     private readonly int _version;
     private readonly Func<int, JsonElement, T?>? _migrate;
+    private bool _loadBlocked;
 
     public JsonStore(string path, int version = 1, Func<int, JsonElement, T?>? migrate = null)
     {
@@ -41,7 +43,7 @@ public sealed class JsonStore<T> where T : new()
         try { text = ReadWithRetry(); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            KeepCopy();
+            _loadBlocked = true;
             return new T();
         }
 
@@ -64,6 +66,7 @@ public sealed class JsonStore<T> where T : new()
 
     public void Save(T value)
     {
+        if (_loadBlocked) throw new IOException($"{Path.GetFileName(_path)} could not be read at startup, so it won't be overwritten. Close whatever has it open and restart the app.");
         var dir = Path.GetDirectoryName(_path);
         if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
         var tmp = _path + ".tmp";
@@ -98,12 +101,6 @@ public sealed class JsonStore<T> where T : new()
     private void SetAside(string reason)
     {
         try { File.Move(_path, AsideName(reason)); }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-    }
-
-    private void KeepCopy()
-    {
-        try { File.Copy(_path, AsideName("unreadable")); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 }

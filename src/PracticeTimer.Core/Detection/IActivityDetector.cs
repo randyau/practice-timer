@@ -9,5 +9,4 @@ public readonly record struct ActivitySample(TimeSpan Time, bool Active, FrameTa
 public interface IActivityDetector
 {
     ActivitySample Process(AudioFrame frame);
-    void Reset();
 }

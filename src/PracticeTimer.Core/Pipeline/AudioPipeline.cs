@@ -8,10 +8,13 @@ namespace PracticeTimer.Core.Pipeline;
 /// <summary>What the UI needs to draw the level meter. Immutable, published by the audio thread.</summary>
 public sealed record MeterSnapshot(
     double Dbfs, double FloorDb, double ThresholdDb, FrameTag Tag, double? Bpm,
-    bool Calibrating, int MetronomeCount)
+    bool Calibrating)
 {
-    public static readonly MeterSnapshot Empty = new(Dsp.MinDb, NoiseFloorEstimator.DefaultFloorDb, -55, FrameTag.Quiet, null, false, 0);
+    public static readonly MeterSnapshot Empty = new(Dsp.MinDb, NoiseFloorEstimator.DefaultFloorDb, -55, FrameTag.Quiet, null, false);
 }
+
+/// <summary>A calibrated noise floor and its bias, kept so a reopened microphone doesn't lose it.</summary>
+public readonly record struct NoiseCalibration(double FloorDb, double Bias);
 
 /// <summary>Mono samples in; clock activity, learning and meter data out. Safe to call from the audio thread.</summary>
 public sealed class AudioPipeline
@@ -36,7 +39,8 @@ public sealed class AudioPipeline
     private ActivitySample _last;
     private MeterSnapshot _lastTaken = MeterSnapshot.Empty;
 
-    public AudioPipeline(int sampleRate, PracticeClock clock, DetectorSettings settings, FingerprintBank bank)
+    /// <summary><paramref name="noise"/> carries an earlier calibration over when the same microphone is reopened.</summary>
+    public AudioPipeline(int sampleRate, PracticeClock clock, DetectorSettings settings, FingerprintBank bank, NoiseCalibration? noise = null)
     {
         _clock = clock;
         _bank = bank;
@@ -44,6 +48,7 @@ public sealed class AudioPipeline
         _slicer = new FrameSlicer(sampleRate, FrameLength);
         _detector = new LoudnessDetector(settings, bank);
         _auto = new AutoLearner(bank);
+        if (noise is { } n) _detector.Floor.Restore(n.FloorDb, n.Bias);
         _detector.CleanTick += t =>
         {
             if (_learn is { IsDone: false }) _learn.OnCleanTick(t);
@@ -72,6 +77,9 @@ public sealed class AudioPipeline
     }
 
     private static int Rank(FrameTag t) => t switch { FrameTag.Active => 3, FrameTag.Metronome => 2, FrameTag.Loud => 1, _ => 0 };
+    /// <summary>The calibrated floor, or null if Calibrate hasn't run on this pipeline (or the one it was seeded from).</summary>
+    public NoiseCalibration? Calibration => _detector.Floor.Calibrated ? new NoiseCalibration(_detector.Floor.Floor, _detector.Floor.Bias) : null;
+
     public GuidedLearnSession? Learn { get { lock (_gate) return _learn; } }
     public bool AutoLearnEnabled { get => _auto.Enabled; set => _auto.Enabled = value; }
 
@@ -80,10 +88,11 @@ public sealed class AudioPipeline
 
     public void StartLearn()
     {
-        // Frames are not reported to the clock while learning, so end any run now rather than bridge the gap.
-        _clock.Interrupt();
         lock (_gate)
         {
+            // Frames are not reported to the clock while learning, so end any run now rather than bridge the gap.
+            // Inside the lock so no frame can slip a new pending start in between.
+            _clock.Interrupt();
             _learn = new GuidedLearnSession(_bank, _now);
             _learnReported = false;
         }
@@ -96,9 +105,9 @@ public sealed class AudioPipeline
 
     public void StartCalibration()
     {
-        _clock.Interrupt();
         lock (_gate)
         {
+            _clock.Interrupt();
             _calibration = new List<double>();
             _snapshot = _snapshot with { Calibrating = true };
         }
@@ -125,7 +134,7 @@ public sealed class AudioPipeline
             });
             // One snapshot per chunk, not per 25 ms frame: only the latest is ever read.
             if (_framesSince) _snapshot = new MeterSnapshot(_last.Dbfs, _detector.Floor.Floor, _detector.ThresholdDb, _last.Tag,
-                _detector.Periodicity.CurrentBpm ?? _learn?.Bpm, _calibration != null, _bank.EnabledCount);
+                _detector.Periodicity.CurrentBpm ?? _learn?.Bpm, _calibration != null);
         }
         if (finished != null) LearnFinished?.Invoke(finished);
     }

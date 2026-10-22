@@ -223,4 +223,33 @@ public class PracticeClockAutoTests
         Assert.True(t.Wait(2000));
         Assert.NotEqual(TimeSpan.MinValue, seen);
     }
+
+    [Fact]
+    public void CreditedElapsedExcludesTrailingQuiet()
+    {
+        var c = Make();
+        c.StartAuto();
+        Feed(c, 10, true);
+        Feed(c, 3, false);
+        Assert.InRange(c.Elapsed.TotalSeconds, 12.5, 13.1);
+        Assert.InRange(c.CreditedElapsed.TotalSeconds, 9.9, 10.1);
+    }
+
+    [Fact]
+    public void ReapplyingTheSameGoalDoesNotRearmTheChime()
+    {
+        var c = Make();
+        var fired = 0;
+        c.GoalReached += () => fired++;
+        c.Goal = TimeSpan.FromSeconds(2);
+        c.StartAuto();
+        Feed(c, 5, true);
+        c.Tick();
+        c.Goal = TimeSpan.FromSeconds(2);
+        c.Tick();
+        Assert.Equal(1, fired);
+        c.Goal = TimeSpan.FromSeconds(3);
+        c.Tick();
+        Assert.Equal(2, fired);
+    }
 }

@@ -25,7 +25,12 @@ public sealed class PracticeClock
         get => _goal;
         set
         {
-            lock (_gate) { _goal = value; _goalFired = false; }
+            lock (_gate)
+            {
+                if (_goal == value) return; // re-applying the same goal must not re-arm the chime
+                _goal = value;
+                _goalFired = false;
+            }
         }
     }
     public TimeSpan StartDelay { get; set; } = TimeSpan.FromSeconds(1);
@@ -176,7 +181,12 @@ public sealed class PracticeClock
         if (fire) GoalReached?.Invoke();
     }
 
-    /// <summary>Like Elapsed, but an auto run counts only to its last active sample, so the goal never fires on rolled-back time.</summary>
+    /// <summary>Like <see cref="Elapsed"/>, but an auto run counts only to its last active sample. What gets saved and what the goal is judged on.</summary>
+    public TimeSpan CreditedElapsed
+    {
+        get { lock (_gate) return GoalElapsedUnlocked(); }
+    }
+
     private TimeSpan GoalElapsedUnlocked() =>
         State == ClockState.Playing ? _committed + (_lastActive - _runStart) : ElapsedUnlocked();
 

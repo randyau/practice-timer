@@ -23,13 +23,15 @@ public sealed class MicCapture : IDisposable
     private SamplesHandler? _onSamples;
     private float[] _mono = new float[4096];
     private long _lastDataTimestamp;
-
-    public int SampleRate { get; private set; }
+    private bool _hasData;
 
     /// <summary>Raised only when a capture ends on its own (device lost, driver error). Never for a deliberate Stop or restart.</summary>
     public event Action<Exception?>? Stopped;
 
     public bool IsRunning => _capture != null;
+
+    /// <summary>True once the current capture has delivered at least one block.</summary>
+    public bool HasData => Volatile.Read(ref _hasData);
 
     /// <summary>How long since audio last arrived (or since capture started, before the first block). Zero when not capturing.</summary>
     public TimeSpan SilenceAge => _capture == null ? TimeSpan.Zero
@@ -66,9 +68,9 @@ public sealed class MicCapture : IDisposable
             var wf = capture.WaveFormat is WaveFormatExtensible ext ? ext.ToStandardWaveFormat() : capture.WaveFormat;
             var kind = KindOf(wf);
             var channels = Math.Max(1, wf.Channels);
-            SampleRate = wf.SampleRate;
             _onSamples = onSamples;
             Interlocked.Exchange(ref _lastDataTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+            Volatile.Write(ref _hasData, false);
             var mine = capture;
             capture.DataAvailable += (_, a) => Convert(a.Buffer, a.BytesRecorded, kind, channels);
             capture.RecordingStopped += (_, a) =>
@@ -79,7 +81,7 @@ public sealed class MicCapture : IDisposable
             _device = device;
             _capture = capture;
             capture.StartRecording();
-            return SampleRate;
+            return wf.SampleRate;
         }
         catch
         {
@@ -105,6 +107,7 @@ public sealed class MicCapture : IDisposable
     private void Convert(byte[] buf, int bytes, Sample kind, int channels)
     {
         Interlocked.Exchange(ref _lastDataTimestamp, System.Diagnostics.Stopwatch.GetTimestamp());
+        Volatile.Write(ref _hasData, true);
         var bytesPer = kind switch { Sample.Pcm8 => 1, Sample.Pcm16 => 2, Sample.Pcm24 => 3, Sample.Float64 => 8, _ => 4 };
         var frames = Math.Min(bytes, buf.Length) / (bytesPer * channels);
         if (frames == 0) return;

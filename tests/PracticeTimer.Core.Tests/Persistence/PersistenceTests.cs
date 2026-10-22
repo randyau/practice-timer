@@ -96,6 +96,19 @@ public class JsonStoreTests : TempDirTest
     }
 
     [Fact]
+    public void AFileThatCouldNotBeReadIsNeverOverwrittenWithDefaults()
+    {
+        var path = Path.Combine(Dir, "a.json");
+        var original = "{\"version\": 1, \"data\": {\"Name\": \"precious\"}}";
+        File.WriteAllText(path, original);
+        var s = new JsonStore<Doc>(path);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            Assert.Equal("x", s.Load().Name);
+        Assert.Throws<IOException>(() => s.Save(new Doc { Name = "defaults" }));
+        Assert.Equal(original, File.ReadAllText(path));
+    }
+
+    [Fact]
     public void ReplacingAnExistingFileKeepsItReadable()
     {
         var path = Path.Combine(Dir, "a.json");
@@ -108,10 +121,12 @@ public class JsonStoreTests : TempDirTest
 
 public class MetronomeStoreTests : TempDirTest
 {
+    private static readonly double[] Spec24 = Enumerable.Range(0, 24).Select(i => (i - 12) / 16.0).ToArray();
+
     private static MetronomeProfile P(string name, bool locked) => new()
     {
         Name = name, Locked = locked, MinBpm = 60, MaxBpm = 90, MicDeviceId = "mic1", MicName = "USB",
-        Clusters = { new MetronomeCluster { Spectrum = new[] { 0.5, -0.25, 0.125 }, MeanPeakDb = -22.5, Count = 9 } },
+        Clusters = { new MetronomeCluster { Spectrum = Spec24, MeanPeakDb = -22.5, Count = 9 } },
     };
 
     [Fact]
@@ -123,7 +138,7 @@ public class MetronomeStoreTests : TempDirTest
         Assert.Equal("kept", loaded.Name);
         Assert.True(loaded.Locked);
         Assert.Equal("mic1", loaded.MicDeviceId);
-        Assert.Equal(new[] { 0.5, -0.25, 0.125 }, loaded.Clusters[0].Spectrum);
+        Assert.Equal(Spec24, loaded.Clusters[0].Spectrum);
         Assert.Equal(-22.5, loaded.Clusters[0].MeanPeakDb);
         Assert.Equal(9, loaded.Clusters[0].Count);
     }
@@ -287,5 +302,43 @@ public class SettingsSanitizeTests : TempDirTest
         s.Sanitize();
         Assert.Equal(5, s.StopDelaySeconds);
         Assert.Equal(-55, s.MinTriggerDb);
+    }
+}
+
+public class MetronomeStoreValidationTests : TempDirTest
+{
+    private string Write(string json)
+    {
+        var path = Path.Combine(Dir, "m.json");
+        File.WriteAllText(path, json);
+        return path;
+    }
+
+    [Fact]
+    public void NullProfilesListLoadsAsEmpty() =>
+        Assert.Empty(new MetronomeStore(Write("{\"version\":1,\"data\":{\"Profiles\":null}}")).Load());
+
+    [Fact]
+    public void MalformedProfilesAreDroppedAndGoodOnesKept()
+    {
+        var good = string.Join(",", Enumerable.Repeat("0.1", 24));
+        var short30 = string.Join(",", Enumerable.Repeat("0.1", 30));
+        var json = "{\"version\":1,\"data\":{\"Profiles\":["
+            + $"{{\"Id\":\"ok\",\"Locked\":true,\"Clusters\":[{{\"Spectrum\":[{good}],\"MeanPeakDb\":-20,\"Count\":3}}]}},"
+            + $"{{\"Id\":\"wrongsize\",\"Clusters\":[{{\"Spectrum\":[{short30}],\"MeanPeakDb\":-20,\"Count\":3}}]}},"
+            + "{\"Id\":\"nullclusters\",\"Clusters\":null},"
+            + "{\"Id\":\"empty\",\"Clusters\":[]},"
+            + "null]}}";
+        Assert.Equal("ok", Assert.Single(new MetronomeStore(Write(json)).Load()).Id);
+    }
+
+    [Fact]
+    public void NullListsInHistoryFileAreTolerated()
+    {
+        var path = Path.Combine(Dir, "h.json");
+        File.WriteAllText(path, "{\"version\":1,\"data\":{\"Sessions\":null,\"Instruments\":null}}");
+        var h = new HistoryStore(path);
+        Assert.Empty(h.Sessions);
+        Assert.Empty(h.Instruments);
     }
 }

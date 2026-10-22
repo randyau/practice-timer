@@ -27,12 +27,12 @@ public partial class HistoryWindow : Window
     {
         SessionGrid.ItemsSource = _history.Sessions.OrderByDescending(s => s.Start).Select(s => new
         {
-            s.Id, Date = s.Start.ToString("g"), Duration = Fmt(s.DurationSeconds), s.Mode, s.Instrument, s.Note,
+            s.Id, Date = s.Start.ToString("g"), s.Start, Duration = Fmt(s.DurationSeconds), Seconds = s.DurationSeconds, s.Mode, s.Instrument, s.Note,
         }).ToList();
         DayGrid.ItemsSource = HistoryAggregator.Daily(_history.Sessions)
-            .Select(d => new { Label = d.Day.ToString("ddd d MMM yyyy"), d.Sessions, Total = Fmt(d.Seconds) }).ToList();
+            .Select(d => new { Label = d.Day.ToString("ddd d MMM yyyy"), d.Day, d.Sessions, Total = Fmt(d.Seconds), d.Seconds }).ToList();
         WeekGrid.ItemsSource = HistoryAggregator.Weekly(_history.Sessions)
-            .Select(w => new { Label = w.WeekStart.ToString("d MMM yyyy"), w.Sessions, Total = Fmt(w.Seconds) }).ToList();
+            .Select(w => new { Label = w.WeekStart.ToString("d MMM yyyy"), w.WeekStart, w.Sessions, Total = Fmt(w.Seconds), w.Seconds }).ToList();
     }
 
     private void Delete_Click(object sender, RoutedEventArgs e)

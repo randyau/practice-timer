@@ -7,7 +7,6 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <AssemblyName>PracticeTimer</AssemblyName>
     <RootNamespace>PracticeTimer</RootNamespace>
-    <ApplicationIcon />
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <!-- The manifest sets per-monitor DPI for the WPF windows; the WinForms analyzer only cares about its own startup path. -->
     <NoWarn>$(NoWarn);WFAC010</NoWarn>

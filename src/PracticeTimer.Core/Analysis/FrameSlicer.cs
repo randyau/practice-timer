@@ -22,8 +22,6 @@ public sealed class FrameSlicer
         _buf = new float[_frameSamples];
     }
 
-    public int FrameSamples => _frameSamples;
-
     public void Push(ReadOnlySpan<float> samples, Action<AudioFrame> onFrame)
     {
         while (!samples.IsEmpty)

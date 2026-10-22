@@ -26,6 +26,11 @@ public sealed class MetronomeProfile
 
     [JsonIgnore] public double EffectiveBandHiHz => BandHiHz > 0 ? BandHiHz : Analysis.BandSpectrum.DefaultHiHz;
 
+    /// <summary>False for a profile from a damaged or hand-edited file that the matcher couldn't safely use.</summary>
+    public bool IsUsable() =>
+        !string.IsNullOrEmpty(Id) && Clusters is { Count: > 0 }
+        && Clusters.All(c => c?.Spectrum is { } s && s.Length == Analysis.BandSpectrum.Bands && s.All(double.IsFinite) && double.IsFinite(c.MeanPeakDb));
+
     public MetronomeProfile Clone() => new()
     {
         Id = Id, Name = Name, Locked = Locked, Enabled = Enabled, MinBpm = MinBpm, MaxBpm = MaxBpm,

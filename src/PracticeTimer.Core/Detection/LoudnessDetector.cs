@@ -12,6 +12,12 @@ public sealed class LoudnessDetector : IActivityDetector
     private TimeSpan _holdUntil = TimeSpan.MinValue;
 
     private static readonly TimeSpan CleanGap = TimeSpan.FromMilliseconds(80);
+    // Steady loud sound with no rests (a fan, a hum) is room noise, not playing; see FeedSteadyNoise.
+    private static readonly TimeSpan SteadyAfter = TimeSpan.FromSeconds(30);
+    private const double SteadyRangeDb = 6;
+    private const int SteadyWindowFrames = 400;
+    private readonly Queue<double> _loudRun = new();
+    private TimeSpan _loudFor;
     private Burst? _pendingClean;
     private bool _pendingMatched;
 
@@ -40,6 +46,8 @@ public sealed class LoudnessDetector : IActivityDetector
         // The floor is frozen while the detector is active (including its hangover), so rests inside a phrase
         // can't drag it down to the instrument's own decay.
         if (!loud && now > _holdUntil) Floor.Add(db);
+        else if (loud) FeedSteadyNoise(db, frame.Duration);
+        if (!loud) { _loudRun.Clear(); _loudFor = TimeSpan.Zero; }
         Periodicity.Expire(now);
 
         if (!_s.MetronomeFilterEnabled) return Emit(now, db, loud, loud, false);
@@ -73,6 +81,23 @@ public sealed class LoudnessDetector : IActivityDetector
         return Emit(now, db, loud, active, metronome);
     }
 
+    /// <summary>
+    /// The floor only learns from quiet frames, so a step up in room noise bigger than the margin would never be
+    /// learned and would read as playing forever. After 30 s of unbroken loudness that never varies by more than
+    /// 6 dB over the last 10 s, the level is treated as noise and fed to the floor, which then rises past it.
+    /// Real playing has rests and dynamics well beyond that.
+    /// </summary>
+    private void FeedSteadyNoise(double db, TimeSpan frameLength)
+    {
+        _loudFor += frameLength;
+        _loudRun.Enqueue(db);
+        while (_loudRun.Count > SteadyWindowFrames) _loudRun.Dequeue();
+        if (_loudFor < SteadyAfter || _loudRun.Count < SteadyWindowFrames) return;
+        double lo = double.MaxValue, hi = double.MinValue;
+        foreach (var v in _loudRun) { lo = Math.Min(lo, v); hi = Math.Max(hi, v); }
+        if (hi - lo <= SteadyRangeDb) Floor.Add(db);
+    }
+
     private void ReleaseCleanTick(TimeSpan now, bool loud)
     {
         if (_pendingClean == null) return;
@@ -98,14 +123,5 @@ public sealed class LoudnessDetector : IActivityDetector
     {
         while (_duty.Count > 0 && _duty.Peek().End < now - _s.DutyWindow) _duty.Dequeue();
         return _duty.Sum(d => d.Loud.TotalSeconds) / _s.DutyWindow.TotalSeconds;
-    }
-
-    public void Reset()
-    {
-        _bursts.Reset();
-        Periodicity.Reset();
-        _duty.Clear();
-        _pendingClean = null;
-        _holdUntil = TimeSpan.MinValue;
     }
 }

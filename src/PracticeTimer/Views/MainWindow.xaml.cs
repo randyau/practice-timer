@@ -81,7 +81,7 @@ public partial class MainWindow : Window
     private bool? AskSave(TimeSpan elapsed)
     {
         if (!IsVisible) Restore(); // a prompt owned by a hidden window is easy to miss
-        var r = MessageBox.Show(this, $"Save this {elapsed:hh\\:mm\\:ss} session to history?", "Reset timer",
+        var r = MessageBox.Show(this, $"Save this {(int)elapsed.TotalHours:00}:{elapsed.Minutes:00}:{elapsed.Seconds:00} session to history?", "Reset timer",
             MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
         return r switch { MessageBoxResult.Yes => true, MessageBoxResult.No => false, _ => null };
     }

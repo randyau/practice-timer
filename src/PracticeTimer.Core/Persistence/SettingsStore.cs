@@ -3,7 +3,6 @@ namespace PracticeTimer.Core.Persistence;
 public sealed class AppSettings
 {
     public string? DeviceId { get; set; }
-    public string? DeviceName { get; set; }
     public string Mode { get; set; } = "Auto";
     public double StartDelaySeconds { get; set; } = 1;
     public double StopDelaySeconds { get; set; } = 5;
@@ -28,11 +27,11 @@ public sealed class AppSettings
     /// </summary>
     public void Sanitize()
     {
-        StartDelaySeconds = Clamp(StartDelaySeconds, 0.2, 30, 1);
-        StopDelaySeconds = Clamp(StopDelaySeconds, 1, 600, 5);
+        StartDelaySeconds = Clamp(StartDelaySeconds, 0.3, 5, 1);
+        StopDelaySeconds = Clamp(StopDelaySeconds, 1, 30, 5);
         SensitivityMarginDb = Clamp(SensitivityMarginDb, 4, 30, 12);
         MinTriggerDb = Clamp(MinTriggerDb, -90, -10, -55);
-        DutyThreshold = Clamp(DutyThreshold, 0.02, 1, 0.20);
+        DutyThreshold = Clamp(DutyThreshold, 0.05, 0.6, 0.20);
         GoalMinutes = Math.Clamp(GoalMinutes, 0, 24 * 60);
         if (Mode is not ("Auto" or "Manual")) Mode = "Auto";
         if (Theme is not ("System" or "Light" or "Dark")) Theme = "System";

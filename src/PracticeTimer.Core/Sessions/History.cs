@@ -29,6 +29,8 @@ public sealed class HistoryStore
     {
         _store = new JsonStore<Data>(path);
         _data = _store.Load();
+        _data.Sessions ??= new();
+        _data.Instruments ??= new();
     }
 
     /// <summary>Raised when writing the file fails. The change stays in memory and the next successful save includes it.</summary>

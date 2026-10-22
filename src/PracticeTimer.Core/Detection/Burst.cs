@@ -64,10 +64,4 @@ public sealed class BurstTracker
         foreach (var f in _samples) { f.CopyTo(all, at); at += f.Length; }
         return all;
     }
-
-    public void Reset()
-    {
-        _open = false;
-        _prevEnd = TimeSpan.FromMinutes(-10);
-    }
 }

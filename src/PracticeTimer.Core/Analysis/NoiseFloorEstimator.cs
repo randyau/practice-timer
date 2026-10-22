@@ -20,6 +20,18 @@ public sealed class NoiseFloorEstimator
 
     public double Floor => _floor;
 
+    /// <summary>How far above the quiet-frame low percentile the floor sits since the last calibration (0 if never calibrated).</summary>
+    public double Bias => _bias;
+    public bool Calibrated { get; private set; }
+
+    /// <summary>Carries a calibration over to a fresh estimator, e.g. after the microphone was reopened.</summary>
+    public void Restore(double floorDb, double bias)
+    {
+        _floor = floorDb;
+        _bias = bias;
+        Calibrated = true;
+    }
+
     public void Add(double dbfs)
     {
         _window.Enqueue(dbfs);
@@ -40,6 +52,7 @@ public sealed class NoiseFloorEstimator
         var n = Fill();
         _bias = Math.Max(0, Percentile(n, High) - Percentile(n, Low));
         _floor = Estimate();
+        Calibrated = true;
     }
 
     private double Estimate()
