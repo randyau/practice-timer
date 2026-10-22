@@ -1,0 +1,30 @@
+namespace PracticeTimer.Core.Persistence;
+
+public sealed class AppSettings
+{
+    public string? DeviceId { get; set; }
+    public string? DeviceName { get; set; }
+    public string Mode { get; set; } = "Auto";
+    public double StartDelaySeconds { get; set; } = 1;
+    public double StopDelaySeconds { get; set; } = 5;
+    public double SensitivityMarginDb { get; set; } = 12;
+    public double DutyThreshold { get; set; } = 0.20;
+    public bool MetronomeFilterEnabled { get; set; } = true;
+    public bool AutoLearnMetronome { get; set; } = true;
+    public int GoalMinutes { get; set; }
+    public bool ChimeEnabled { get; set; } = true;
+    public bool AlwaysOnTop { get; set; }
+    public bool MinimizeToTray { get; set; }
+    public bool StartMinimized { get; set; }
+    public bool DarkTheme { get; set; }
+    public bool LargeText { get; set; }
+    public string? LastInstrument { get; set; }
+}
+
+public sealed class SettingsStore
+{
+    private readonly JsonStore<AppSettings> _store;
+    public SettingsStore(string path) => _store = new JsonStore<AppSettings>(path);
+    public AppSettings Load() => _store.Load();
+    public void Save(AppSettings s) => _store.Save(s);
+}
