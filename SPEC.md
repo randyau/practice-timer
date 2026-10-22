@@ -79,7 +79,7 @@ A family usually has one or two metronomes, so each only has to be taught once.
 #### Guided "Learn metronome" flow (the primary way to learn)
 1. The student or parent starts the metronome, then presses **Learn metronome** (needs the Metronome filter on).
 2. `Learning metronome... n/8 ticks. Let it run on its own.` shows with a progress ring. The meter colours ticks the filter recognises. Time is not counted while learning, and sustained sound is rejected.
-3. The app listens until it has ≥ 8 clean ticks over ≥ 4 s with consistent fingerprints and a steady interval (±15%), or times out at 20 s. More than 1 s of sustained sound ends it with `Too much other sound`.
+3. The app listens until it has ≥ 8 clean ticks over ≥ 4 s with consistent fingerprints and a steady interval (±15%), or times out at 20 s. While learning, the detector is more sensitive (6 dB over the floor, down to −70 dBFS) and accepts ticks up to 400 ms long, because a phone speaker is quiet and its click rings on. One unbroken second of sustained sound ends it with `Too much other sound`.
 4. **Success:** chime, green check, `Metronome learned (BPM ~72)`; the profile is **locked** and saved.
 5. **Failure:** `Didn't hear a steady metronome` (timeout) or `Too much other sound. Try again.` Nothing is stored.
 6. The button reads **Cancel learning** while learning and is always usable then. Learning again afterwards adds a profile, which is how a second metronome is taught. A mic change or loss mid-learn discards the learn with a message.

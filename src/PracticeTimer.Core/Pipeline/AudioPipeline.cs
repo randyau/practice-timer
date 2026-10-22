@@ -121,8 +121,9 @@ public sealed class AudioPipeline
             _slicer.Push(mono, frame =>
             {
                 _now = frame.End;
-                var sample = _detector.Process(frame);
                 var learning = _learn is { IsDone: false };
+                _detector.Learning = learning;
+                var sample = _detector.Process(frame);
                 _learn?.OnFrame(_now, _detector.SustainedOpen, frame.Duration);
                 if (_learn is { IsDone: true } && !_learnReported) { _learnReported = true; finished = _learn; }
                 if (!learning && _calibration == null) _clock.OnActivity(sample.Time, sample.Active);

@@ -10,7 +10,7 @@ public sealed record Burst(TimeSpan Onset, TimeSpan Duration, double PeakDb, dou
 
 public sealed class BurstTracker
 {
-    private readonly TimeSpan _shortMax;
+    private TimeSpan _shortMax;
     private readonly TimeSpan _closeGap;
     private bool _open;
     private TimeSpan _onset, _lastLoudEnd, _prevEnd = TimeSpan.FromMinutes(-10), _gapBefore, _quiet;
@@ -24,6 +24,9 @@ public sealed class BurstTracker
         _shortMax = shortMax ?? TimeSpan.FromMilliseconds(150);
         _closeGap = closeGap ?? TimeSpan.FromMilliseconds(50);
     }
+
+    /// <summary>Longest run of loud frames that still counts as a short burst (a tick, a pluck) rather than a held sound.</summary>
+    public TimeSpan ShortMax { get => _shortMax; set => _shortMax = value; }
 
     public TimeSpan OpenDuration => _open ? _lastLoudEnd - _onset : TimeSpan.Zero;
     public bool IsSustained => _open && OpenDuration > _shortMax;

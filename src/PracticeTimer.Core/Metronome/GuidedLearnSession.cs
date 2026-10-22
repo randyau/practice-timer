@@ -31,7 +31,8 @@ public sealed class GuidedLearnSession
     public void OnFrame(TimeSpan now, bool sustainedOpen, TimeSpan frameLength)
     {
         if (Status != LearnStatus.Learning) return;
-        if (sustainedOpen) _sustained += frameLength;
+        // Unbroken only: a metronome whose clicks ring on must not add up to "too much sound" over a few ticks.
+        _sustained = sustainedOpen ? _sustained + frameLength : TimeSpan.Zero;
         if (_sustained >= MaxSustained) Status = LearnStatus.TooMuchSound;
         else if (now - _start >= Timeout) Status = LearnStatus.Timeout;
     }

@@ -33,13 +33,23 @@ public sealed class LoudnessDetector : IActivityDetector
     public bool SustainedOpen => _bursts.IsSustained;
     public event Action<CleanTick>? CleanTick;
 
+    /// <summary>
+    /// True while the user is teaching a metronome. The gate is made more sensitive and longer ticks are accepted,
+    /// since a phone speaker is quiet and its click rings on. Nothing is being timed during a learn.
+    /// </summary>
+    public bool Learning { get; set; }
+
+    private static readonly TimeSpan LearnShortMax = TimeSpan.FromMilliseconds(400);
+    private const double LearnMarginDb = 6, LearnAbsoluteMinDb = -70;
+
     public NoiseFloorEstimator Floor { get; } = new();
     public PeriodicityTracker Periodicity { get; } = new();
 
     public ActivitySample Process(AudioFrame frame)
     {
-        _gate.MarginDb = _s.MarginDb;
-        _gate.AbsoluteMinDb = _s.AbsoluteMinDb;
+        _gate.MarginDb = Learning ? Math.Min(_s.MarginDb, LearnMarginDb) : _s.MarginDb;
+        _gate.AbsoluteMinDb = Learning ? Math.Min(_s.AbsoluteMinDb, LearnAbsoluteMinDb) : _s.AbsoluteMinDb;
+        _bursts.ShortMax = Learning ? LearnShortMax : _s.ShortBurstMax;
         var db = Dsp.Dbfs(frame.Samples);
         var loud = _gate.Process(db, Floor.Floor);
         var now = frame.End;

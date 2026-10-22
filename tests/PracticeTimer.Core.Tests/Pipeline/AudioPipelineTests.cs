@@ -62,6 +62,18 @@ public class AudioPipelineTests
     }
 
     [Fact]
+    public void GuidedLearnHearsQuietClicksThatRingOn()
+    {
+        var done = new List<LearnStatus>();
+        _p.LearnFinished += s => done.Add(s.Status);
+        Feed(Silence(1));
+        _p.StartLearn();
+        // A phone speaker: quiet, and each click rings for a third of a second.
+        Feed(ClickTrain(80, 15, () => Click(-52, freq: 1500, tauMs: 90, lengthMs: 350)));
+        Assert.Equal(new[] { LearnStatus.Success }, done);
+    }
+
+    [Fact]
     public void ClockIgnoresSoundWhileLearning()
     {
         _clock.StartAuto();
