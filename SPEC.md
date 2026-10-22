@@ -1,0 +1,161 @@
+# Practice Timer: Spec (v0.1 draft)
+
+A simple Windows app for kids and parents to track how long a student has actually been practicing an instrument. It is a stopwatch that can optionally run itself by listening to the microphone.
+
+## Stack
+- C# / .NET 8, WPF, MVVM-light (no heavy framework)
+- NAudio for mic enumeration (WASAPI) and capture
+- Settings and history stored as JSON in `%AppData%\PracticeTimer\`
+- Publish as a self-contained single-file `.exe` (win-x64)
+
+## Main window
+- Large time display `HH:MM:SS` (kid-friendly, high contrast)
+- Buttons: **Start**, **Pause**, **Reset**. Start and Pause share one toggle button.
+- **Mode toggle**: Manual or Auto-listen
+  - Manual is a plain stopwatch.
+  - Auto: Start arms the listener. The clock runs only while sound is detected.
+- Status indicator: `Stopped` / `Listening (waiting for sound)` / `Playing` / `Paused (quiet)`
+- Mic dropdown (all active capture devices). The choice is remembered, and the list refreshes when devices are plugged in or removed.
+- Live level meter with a draggable threshold line, plus a sensitivity slider
+- Goal row: target minutes (optional) and a progress bar. A chime and visual cue fire once when the goal is reached.
+- Window options: always-on-top, minimize to tray (tray tooltip shows the elapsed time)
+- Today's total, shown small under the timer
+
+## Auto-listen detection (v1: loudness only)
+1. Capture mono audio at 16 kHz or 44.1 kHz. Compute RMS in dBFS every ~50 ms.
+2. **Noise floor**: adaptive. Run a slow rolling estimate (e.g. the 10th percentile over the last ~10 s of quiet frames), and freeze it while sound is active.
+3. **Loud frame** means level > noise floor + margin, where the margin is set by the sensitivity slider. There is also an absolute minimum floor so total silence doesn't trigger on a cough.
+3a. **Metronome rejection** (see the next section). A loud frame only counts as **active** if it is not part of a metronome pattern.
+4. State machine with hysteresis:
+   - Idle → Playing: sound is active continuously for **start delay** (default 1 s).
+   - Playing → Paused: no active sound for **stop delay** (default 5 s). The clock stops and the trailing quiet is **removed from the total** (the clock is rolled back to the last moment of active sound).
+   - Short gaps below the stop delay (breaths, rests between phrases) keep the clock running.
+   - Brief spikes shorter than the start delay (door slam, clap) are ignored.
+5. Use separate enter and exit thresholds (about 3 dB apart) so the level doesn't flap at the edge.
+6. All timings and sensitivity are adjustable in Settings. Add a one-click **Calibrate** button that records ~3 s of room quiet and sets the floor.
+7. **Parents and examples count.** A parent playing or demonstrating, or a video example playing, is treated as practice. There is no speaker or source discrimination, and none is wanted. Speech alone is not specifically filtered in v1.
+8. **Design for a later tonal detector**: put detection behind an `IActivityDetector` interface that takes audio frames and outputs `bool active`. A future version can add a spectral or pitched-content check without touching the timer logic.
+
+## Metronome filtering
+Goal: a metronome ticking alone (mechanical click or digital beep, ~40–208 BPM) must not start or sustain the clock. A metronome running while the student plays must not get in the way.
+
+Approach (rhythm and shape, not pitch):
+- **Burst shape.** Group consecutive loud frames into bursts. A metronome tick is a short burst (roughly < 150 ms) followed by a clear gap of near-floor level. Music and speech produce longer or denser energy.
+- **Duty cycle.** Over a sliding ~2–3 s window, compute the fraction of time that is loud. Ticks alone give a low duty cycle (a few percent). Playing gives far more. Only a window above the duty threshold (default ~20%, tunable) counts as active.
+- **Periodicity check.** Track onset times of short bursts. If at least 4 consecutive short bursts have near-constant intervals (±10–15%, in the 0.28–1.5 s range), flag them as a **metronome pattern** and exclude them from the active signal. Learn the interval, and keep ignoring bursts that fall on that grid for a few seconds after the pattern is lost, so a missed beat doesn't leak through.
+- **Playing over it.** When sustained energy appears on top of the ticks, the duty cycle rises and the window becomes active. The ticks being present while the student rests does not hold the clock open, because the stop delay is measured against non-metronome activity only.
+- Known limits: pizzicato, staccato, or a single plucked note repeated very regularly looks like a metronome and may be ignored. A loud mechanical metronome next to the mic raises the noise floor margin slightly. Both can be tuned in Settings, and there is a **Metronome filter** checkbox (on by default) to disable it.
+- The level meter shows metronome-flagged frames in a different color so tuning is easy to see.
+- Saved-metronome tests: round-trip save/load, corrupt file, a saved fingerprint still matching after a restart, and a duplicate learn merging into the existing entry.
+- Unit tests include synthetic click trains at several BPMs (short clicks, 50 ms beeps), clicks with a played note over them, and irregular staccato.
+- To be validated with real recordings of both metronome types.
+
+### Per-session metronome learning
+The metronome often runs for long stretches, may start before the student plays or after the session starts, and may be off for parts of the session. The detector therefore learns the metronome's **sound** (a fingerprint) during the session, so it can recognize it later regardless of tempo or timing.
+
+- **What is learned.** For each metronome-flagged tick: a spectral fingerprint (e.g. ~24-band log-spectrum averaged over the burst), burst duration, and level range. Interval and tempo are *not* part of the fingerprint, so a tempo change doesn't need re-learning.
+- **When it learns.** Only from **clean ticks**: short bursts with quiet gaps (near the noise floor) on both sides. That is the natural case when the student pauses and lets it run. Frames that overlap sustained playing are never used, so the student's instrument can't contaminate the template.
+- **Bootstrap.** Until a fingerprint exists, the periodicity rule above carries the load. After ~4–6 regular clean ticks, a fingerprint is stored. Confidence grows with more clean ticks.
+- **Multiple clusters.** Keep up to ~4 fingerprint clusters, merging similar ones, to cover a mechanical tick/tock pair, an accented beat 1, or a second metronome (e.g. switching from a digital app to a mechanical one). Least recently matched clusters are evicted first.
+- **Matching.** A short burst is ignored if its fingerprint is close to a learned cluster (cosine similarity above a threshold, level within a tolerance band) and it is short enough. It does **not** need to fit the tempo grid, so tempo changes, a dropped beat, or a restarted metronome are handled instantly. Bursts that don't match (a played note, a bump, speech) count as normal activity.
+- **Tempo changes during the session.** Matching is by sound, not by interval, so a student changing the metronome mid-session (e.g. 60 → 80 BPM, or a gradual speed-up) is handled without re-learning. Specifically:
+  - Ticks are matched individually, so an interval jump doesn't break anything.
+  - The periodicity tracker follows the interval with a short moving window (last ~4 ticks) instead of a fixed learned tempo. It re-locks within a few ticks after a change, and the current BPM is shown in the status.
+  - The supported range is ~30–250 BPM, intervals from ~0.24 s to 2 s. Subdivision settings (clicks at 2× or 3× the beat) fall inside that.
+  - While the tempo is changing, or right after, ticks that match the fingerprint are still ignored, so there is no gap where the metronome leaks into the count.
+  - Tempo changes never reset the learned profile.
+- **Level changes.** The level tolerance is relative, so the student moving the metronome or the mic is tolerated. Spectral shape matters more than loudness.
+- **Playing over the metronome.** Sustained playing raises the duty cycle as before. Learned ticks inside that sound are not subtracted, because they don't need to be: the sustained sound is active on its own. Learned ticks still never reset the stop timer.
+- **Noise floor.** Learned ticks are excluded from the noise-floor estimate, so a long-running metronome doesn't push the threshold up or make the app think the room is noisy.
+- **Lifetime.** Learned metronomes are held in memory for the session. **Locked** (guided-learn) metronomes are also **saved across sessions** (see below). **Tentative** (auto-learned) clusters are session-only and are cleared on exit. Reset (the timer) does not clear any metronome profile. The status area shows `Metronome learned` once there's a confident fingerprint.
+
+#### Saved metronomes (across sessions)
+A family usually has one or two metronomes, so a metronome only has to be taught once.
+- **Saving.** A successful guided learn saves the profile automatically to `%AppData%\PracticeTimer\metronomes.json`. The user can give it a name (default `Metronome 1`, `Metronome 2`, …) in a small prompt that can be skipped.
+- **Loading.** All saved metronomes are loaded at startup and active immediately, with no button press needed. The status shows `Metronomes: 2 saved`. Matching works like a locked cluster.
+- **Manage list.** A Settings section lists saved metronomes with name, learned BPM range and date. The user can rename, delete, enable or disable each, or **Forget all**. Disabled ones stay stored but are not used.
+- **Limit.** Up to 4 saved metronomes. Saving a fifth asks which to replace.
+- **Re-learning a known one.** If a guided learn matches a saved fingerprint, the app says `Already known: Metronome 1` and refines it slightly (averaged in) instead of adding a duplicate.
+- **Drift.** The same metronome can sound a bit different with a different mic, room or distance. If a saved metronome is clearly not matching (the guided learn finds a similar but separate sound), the user can simply learn again and delete the old one. Fingerprints are stored per mic device, and a saved metronome is flagged `learned on <mic>` when a different mic is selected. It is still used, but the user is nudged to re-learn if it doesn't seem to match.
+- **Stored data.** Only the numeric spectral fingerprint and summary statistics are stored (no audio). The file is small, human-readable JSON with a version field, and a corrupt file is ignored (and backed up) rather than crashing.
+- **Forget metronome** (main window) clears only the session's tentative clusters and un-loads nothing from disk. Deleting a saved metronome is done from the manage list.
+- **Guided "Learn metronome" flow** (the primary way to learn, to avoid mis-learning):
+  1. The student or parent starts the metronome, then presses **Learn metronome**.
+  2. State `Learning metronome…` shows with a progress ring and a live tick counter. The level meter highlights each detected tick.
+  3. The app listens until it has enough clean ticks (≥8, minimum ~4 s, timeout ~20 s) with consistent fingerprints and clean gaps. During learning it doesn't count time and ignores any sustained sound, and it asks the user to keep still ("Let the metronome run on its own").
+  4. **Success signal:** a short confirmation chime, a green check, and the text `Metronome learned (BPM ~72)`. The learned profile is marked **locked** (high confidence).
+  5. **Failure signals:** `Didn't hear a steady metronome` if it times out, and `Too much other sound, try again` if sustained sound was heard. Nothing is stored on failure.
+  6. Cancel is always available. Pressing **Learn metronome** again adds a cluster, which is useful for a second metronome.
+  On success the metronome is saved (see Saved metronomes). A **Forget metronome** button clears the session's auto-learned clusters.
+- **Automatic learning is a fallback.** A setting, **Auto-learn metronome** (default on), lets the bootstrap above learn without the button. Auto-learned clusters are marked **tentative** and shown as `Metronome (auto)` in the status. They need more clean ticks than a guided learn, are evicted before locked clusters, and are dropped if they match long sustained sound. If it is off, only the guided flow learns.
+- **Locked clusters** are never evicted by auto-learned ones and are only removed by the user from the saved-metronomes list.
+- **Failure modes to watch.** If the first "regular" sound the app hears is actually something else (e.g. repeated pizzicato at a steady tempo), it could learn a wrong fingerprint. The confidence threshold, the clean-gap requirement and the Forget button limit the damage. A learned cluster that matches a lot of long sustained sound is discarded.
+- **Tests.** Guided learn succeeds on a clean click train, times out with silence, and rejects sustained sound; tempo steps (60→90→45 BPM), a continuous accelerando, and a restart at a different tempo with no re-learning. Replay scenarios: metronome first then play; play then metronome; metronome off and on at a different tempo; tick/tock mechanical; accented digital beep; two different metronomes in one session; student pizzicato at a steady tempo with no metronome (must not be learned).
+
+## Timer rules
+- Elapsed time is monotonic (use `Stopwatch`, not wall clock) and survives the UI thread being busy.
+- Manual Start and Pause always override. If the user pauses in Auto mode, the listener is disarmed until Start.
+- Reset stops the clock and clears the elapsed time. If elapsed time is more than a few seconds, ask the user to confirm and offer to save it to history.
+- Mic lost or unplugged: pause, show a visible warning, and don't crash.
+
+## Session log / history
+- A session is saved on Reset or Stop (and on app close, if the timer is non-zero).
+- Fields: date, start time, duration, mode (manual or auto), optional instrument label, optional note.
+- History window: list by day with daily and weekly totals, delete an entry, and export to CSV.
+- The instrument label is a free-text combo box that remembers previous entries (violin, piano, etc.).
+
+## Settings
+- Mic device
+- Start delay, stop delay, sensitivity, and the Calibrate button
+- Default goal minutes and chime on/off
+- Always on top, minimize to tray, start minimized
+- Theme: light or dark, plus a larger-text option
+
+## Privacy
+- Audio is processed in memory only, never recorded, saved, or sent anywhere. Only levels and a numeric spectral fingerprint of the metronome are computed, and the fingerprint (not audio) is what gets saved. State this in the UI (e.g. in About).
+- No network access. No account.
+
+## Non-goals (v1)
+- Telling pieces, notes, or instruments apart, or judging quality
+- Multi-student profiles (single student only)
+- Installer (plain portable `.exe`), Windows 10 support (Windows 11 only)
+- Cloud sync, mobile
+- Tonal or music-vs-speech classification (designed for, not built)
+
+## Project layout (proposed)
+```
+PracticeTimer/
+  PracticeTimer.sln
+  src/PracticeTimer/
+    App.xaml
+    Views/        MainWindow, SettingsWindow, HistoryWindow
+    ViewModels/
+    Audio/        MicCapture, LevelMeter, IActivityDetector, LoudnessDetector
+    Timing/       PracticeClock (state machine)
+    Data/         SettingsStore, HistoryStore, MetronomeStore
+  tests/PracticeTimer.Tests/   state-machine and detector unit tests (synthetic audio)
+```
+
+## Testing
+- The clock state machine and loudness detector are unit-tested with synthetic level sequences (silence, steady tone, bursts, gaps shorter and longer than the stop delay).
+- Manual test checklist: device switching, unplug during run, noisy room, quiet instrument (e.g. a soft violin), speech nearby.
+
+## Decisions
+- Trailing quiet is removed from the total on auto-pause.
+- Single student. Parent playing or video examples count as practice.
+- Metronomes (mechanical and digital) are filtered out.
+- Windows 11 only, plain portable `.exe`.
+
+## Open questions
+1. Any app name, icon or colour preferences? Placeholder name: "Practice Timer".
+2. Can you record 20–30 s samples of your actual metronomes (mechanical and digital), and the instrument being played with and without them? They'd let me tune the filter against reality. If not, I'll use synthetic signals and sensible defaults.
+
+## Milestones
+1. Skeleton WPF app with manual stopwatch, plus tests for the clock
+2. Mic enumeration, level meter, loudness detector, auto mode
+2b. Metronome filter (burst shape, duty cycle, periodicity), tuned against recordings
+2c. Per-session metronome learning (fingerprints, guided Learn flow with success signal, Forget button, tempo-change handling)
+2d. Saved metronomes (MetronomeStore, auto-load at startup, manage list, per-mic flag)
+3. Settings, calibration, and persistence
+4. Goal, tray, and always-on-top
+5. History, CSV export, and packaging
