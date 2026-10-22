@@ -1,12 +1,19 @@
-# Practice Timer: Spec (v0.1 draft)
+# Practice Timer: Spec
 
 A simple Windows app for kids and parents to track how long a student has actually been practicing an instrument. It is a stopwatch that can optionally run itself by listening to the microphone.
+
+**Status:** implemented and covered by synthetic-audio tests. Not yet tuned or validated against real recordings (see [Validation](#validation-and-acceptance-targets)). Statements below describe what the code does; where the code deliberately falls short of the original intent it is listed under [Known deviations and limits](#known-deviations-and-limits).
+
+## Contents
+- [Stack](#stack) · [Main window](#main-window) · [Auto-listen detection](#auto-listen-detection) · [Metronome filtering](#metronome-filtering) · [Timer rules](#timer-rules)
+- [Reliability](#reliability) · [Threading and data ownership](#threading-and-data-ownership) · [Session log / history](#session-log--history) · [Settings](#settings)
+- [Parameters](#parameters) · [Privacy](#privacy) · [Known deviations and limits](#known-deviations-and-limits) · [Non-goals](#non-goals-v1) · [Project layout](#project-layout) · [Testing](#testing) · [Validation](#validation-and-acceptance-targets) · [Decisions](#decisions) · [Open items](#open-items)
 
 ## Stack
 - C# / .NET 8, WPF, MVVM-light (no heavy framework)
 - NAudio for mic enumeration (WASAPI) and capture
-- Settings and history stored as JSON in `%AppData%\PracticeTimer\`
-- Publish as a self-contained single-file `.exe` (win-x64)
+- Settings, history and saved metronomes stored as JSON in `%AppData%\PracticeTimer\`
+- Publish as a self-contained single-file `.exe` (win-x64). The WPF project also compiles on Linux (`EnableWindowsTargeting`), but can only run on Windows.
 
 ## Main window
 - Large time display `HH:MM:SS` (kid-friendly, high contrast)
@@ -14,119 +21,160 @@ A simple Windows app for kids and parents to track how long a student has actual
 - **Mode toggle**: Manual or Auto-listen
   - Manual is a plain stopwatch.
   - Auto: Start arms the listener. The clock runs only while sound is detected.
-- Status indicator: `Stopped` / `Listening... waiting for sound` / `Playing` / `Paused (quiet)` in Auto mode, `Running` / `Paused` in Manual mode. The same line carries warnings and results (microphone problems, learn progress and outcomes, save failures).
+- Status line: `Stopped` / `Listening... waiting for sound` / `Playing` / `Paused (quiet)` in Auto mode, `Running` / `Paused` in Manual mode. The same line carries warnings and results (microphone problems, calibration and learn progress and outcomes, save failures).
 - Mic dropdown (all active capture devices). The choice is remembered, and the list refreshes when devices are plugged in or removed.
 - Live level meter with a draggable threshold line. The sensitivity slider (margin above the room) is in Settings; dragging the line adjusts the same thing.
 - Goal row: target minutes (optional) and a progress bar. A chime and visual cue fire once when the goal is reached.
-- Window options: always-on-top, minimize to tray (tray tooltip shows the elapsed time)
-- Today's total of **saved** sessions (the running one is not included until saved), shown small under the timer
+- Instrument (free text, remembers entries) and Note fields for the session being timed.
+- Window options: always-on-top, minimize to tray (tray tooltip shows the elapsed time).
+- Today's total of **saved** sessions (the running one is not included until saved), shown small under the timer.
 
-## Auto-listen detection (v1: loudness only)
-1. Capture audio at the device's own sample rate (shared-mode WASAPI; 8/16/24/32-bit PCM and 32/64-bit float are handled), mix to mono, and compute RMS in dBFS per 25 ms frame. Non-finite samples read as silence.
-2. **Noise floor**: adaptive. A rolling estimate (the 10th percentile of the last 400 quiet frames, ~10 s), frozen while sound is active (the detector's 0.5 s hangover counts as active). If the room gets steadily louder (a fan switched on) the floor would otherwise never follow, so after 30 s of unbroken loudness that varies by less than 6 dB over the last 10 s, that level is treated as noise and fed to the floor, which then rises past it. A calibration is kept for the microphone it was made on, until the app exits, and is restored when that microphone is reopened.
-3. **Loud frame** means level > noise floor + margin, where the margin is set by the sensitivity slider. There is also an absolute minimum floor so total silence doesn't trigger on a cough.
-3a. **Metronome rejection** (see the next section). A loud frame only counts as **active** if it is not part of a metronome pattern.
-4. State machine with hysteresis:
-   - Idle → Playing: sound is active continuously for **start delay** (default 1 s).
-   - Playing → Paused: no active sound for **stop delay** (default 5 s). The clock stops and the trailing quiet is **removed from the total** (the clock is rolled back to the last moment of active sound).
-   - Short gaps below the stop delay (breaths, rests between phrases) keep the clock running.
-   - Brief spikes shorter than the start delay (door slam, clap) are ignored.
-5. Use separate enter and exit thresholds (about 3 dB apart) so the level doesn't flap at the edge.
-6. All timings and sensitivity are adjustable in Settings. Add a one-click **Calibrate** button that records ~3 s of room quiet and sets the floor at that stretch's 90th percentile. The gap between its 90th and 10th percentiles is kept as a bias, so later frames from the same room don't pull the floor back down. Starting calibration (like starting a guided learn) ends any auto run at its last active moment, and nothing is counted while it runs.
-7. **Parents and examples count.** A parent playing or demonstrating, or a video example playing, is treated as practice. There is no speaker or source discrimination, and none is wanted. Speech alone is not specifically filtered in v1.
-8. **Design for a later tonal detector**: put detection behind an `IActivityDetector` interface that takes audio frames and outputs `bool active`. A future version can add a spectral or pitched-content check without touching the timer logic.
+## Auto-listen detection
+Loudness-based (v1). Detection sits behind `IActivityDetector` (frame in, activity sample out) so a tonal detector can be added later without touching the timer logic.
+
+1. **Capture.** Shared-mode WASAPI at the device's own sample rate (8/16/24/32-bit PCM and 32/64-bit float are handled), mixed to mono, sliced into 25 ms frames, RMS in dBFS. Non-finite samples read as silence.
+2. **Noise floor.** Adaptive: the 10th percentile of the last 400 quiet frames (~10 s), frozen while sound is active (the detector's 0.5 s hangover counts as active). Because only quiet frames feed it, a room that gets steadily louder (a fan switched on) would never be learned; so after 30 s of unbroken loudness that varies by less than 6 dB over the last 10 s, that level is treated as noise and fed to the floor, which then rises past it. Real playing has rests and dynamics beyond that.
+3. **Loud frame** means level > noise floor + margin (sensitivity), and never below an absolute minimum, so total silence doesn't trigger on a cough. Enter and exit thresholds are 3 dB apart so the level doesn't flap.
+4. **Metronome rejection** (next section): a loud frame only counts as **active** if it is not part of a metronome pattern.
+5. **State machine:**
+   - Listening → Playing: sound is active continuously for the **start delay** (default 1 s).
+   - Playing → Paused (quiet): no active sound for the **stop delay** (default 5 s). The clock stops and the trailing quiet is **removed from the total** (rolled back to the last moment of active sound).
+   - Gaps shorter than the stop delay (breaths, rests between phrases) keep the clock running.
+   - Spikes shorter than the start delay (door slam, clap) are ignored.
+6. **Calibrate.** One click records ~3 s of room quiet and sets the floor at that stretch's 90th percentile. The gap between its 90th and 10th percentiles is kept as a bias, so later frames from the same room don't pull the floor back down. The calibration is kept for that microphone until the app exits and is restored when the microphone is reopened. Starting calibration (like starting a guided learn) ends any auto run at its last active moment, and nothing is counted while it runs.
+7. **Parents and examples count.** A parent playing or demonstrating, or a video example playing, is treated as practice. There is no speaker or source discrimination, and none is wanted. Speech alone is not specifically filtered.
 
 ## Metronome filtering
 Goal: a metronome ticking alone (mechanical click or digital beep, ~30–250 BPM) must not start or sustain the clock. A metronome running while the student plays must not get in the way.
 
 Approach (rhythm and shape, not pitch):
-- **Burst shape.** Group consecutive loud frames into bursts. A metronome tick is a short burst (roughly < 150 ms) followed by a clear gap of near-floor level. Music and speech produce longer or denser energy.
-- **Duty cycle.** Over a sliding ~2–3 s window, compute the fraction of time that is loud. Ticks alone give a low duty cycle (a few percent). Playing gives far more. Only a window above the duty threshold (default ~20%, tunable) counts as active.
-- **Periodicity check.** Track onset times of short bursts. If at least 4 consecutive short bursts have near-constant intervals (±12%, in the 0.24–2 s range), flag them as a **metronome pattern** and exclude them from the active signal. Learn the interval, and keep ignoring bursts that fall on that grid for a few seconds after the pattern is lost, so a missed beat doesn't leak through.
-- **Playing over it.** When sustained energy appears on top of the ticks, the duty cycle rises and the window becomes active. The ticks being present while the student rests does not hold the clock open, because the stop delay is measured against non-metronome activity only.
-- Known limits: pizzicato, staccato, or a single plucked note repeated very regularly looks like a metronome and may be ignored. A loud mechanical metronome next to the mic raises the noise floor margin slightly. Both can be tuned in Settings, and there is a **Metronome filter** checkbox (on by default) to disable it.
-- The level meter shows metronome-flagged frames in a different color so tuning is easy to see.
-- Saved-metronome tests: round-trip save/load, corrupt file, a saved fingerprint still matching after a restart, and a duplicate learn merging into the existing entry.
-- Unit tests include synthetic click trains at several BPMs (short clicks, 50 ms beeps), clicks with a played note over them, and irregular staccato.
-- To be validated with real recordings of both metronome types.
+- **Burst shape.** Consecutive loud frames form a burst. A tick is a short burst (< 150 ms) followed by a clear gap near the floor. Music and speech produce longer or denser energy.
+- **Duty cycle.** Over a sliding 2.5 s window, the fraction of time that is loud from short unmatched bursts. Ticks alone give a few percent; playing gives far more. Only a window above the duty threshold (default 20%, tunable) counts as active.
+- **Periodicity.** At least 4 consecutive short bursts with near-constant intervals (±12%, 0.24–2 s) are flagged as a **metronome pattern** and excluded from the active signal. The tracker follows tempo changes with a short moving window and keeps ignoring bursts on the grid for 3 s after the pattern is lost, so a missed beat doesn't leak through. The current BPM is shown, and clears when the pulse stops.
+- **Playing over it.** Sustained energy on top of the ticks raises the duty cycle and the window becomes active. Ticks while the student rests do not hold the clock open: the stop delay is measured against non-metronome activity only.
+- A **Metronome filter** checkbox (on by default) disables all of this. The level meter shows metronome-flagged frames in a different colour so tuning is easy to see.
 
 ### Per-session metronome learning
-The metronome often runs for long stretches, may start before the student plays or after the session starts, and may be off for parts of the session. The detector therefore learns the metronome's **sound** (a fingerprint) during the session, so it can recognize it later regardless of tempo or timing.
+The metronome often runs for long stretches, may start before the student plays, and may be off for parts of the session. The detector therefore learns the metronome's **sound** (a fingerprint), so it can recognise it regardless of tempo or timing.
 
-- **What is learned.** For each metronome-flagged tick: a spectral fingerprint (e.g. ~24-band log-spectrum averaged over the burst), burst duration, and level range. Interval and tempo are *not* part of the fingerprint, so a tempo change doesn't need re-learning.
-- **When it learns.** Only from **clean ticks**: short bursts with quiet gaps (near the noise floor) on both sides. That is the natural case when the student pauses and lets it run. Frames that overlap sustained playing are never used, so the student's instrument can't contaminate the template.
-- **Bootstrap.** Until a fingerprint exists, the periodicity rule above carries the load. After ~4–6 regular clean ticks, a fingerprint is stored. Confidence grows with more clean ticks.
-- **Multiple clusters.** Keep up to ~4 fingerprint clusters, merging similar ones, to cover a mechanical tick/tock pair, an accented beat 1, or a second metronome (e.g. switching from a digital app to a mechanical one). Least recently matched clusters are evicted first.
-- **Matching.** A short burst is ignored if its fingerprint is close to a learned cluster (cosine similarity above a threshold, level within a tolerance band) and it is short enough. It does **not** need to fit the tempo grid, so tempo changes, a dropped beat, or a restarted metronome are handled instantly. Bursts that don't match (a played note, a bump, speech) count as normal activity.
-- **Tempo changes during the session.** Matching is by sound, not by interval, so a student changing the metronome mid-session (e.g. 60 → 80 BPM, or a gradual speed-up) is handled without re-learning. Specifically:
-  - Ticks are matched individually, so an interval jump doesn't break anything.
-  - The periodicity tracker follows the interval with a short moving window (last ~4 ticks) instead of a fixed learned tempo. It re-locks within a few ticks after a change, and the current BPM is shown in the status.
-  - The supported range is ~30–250 BPM, intervals from ~0.24 s to 2 s. Subdivision settings (clicks at 2× or 3× the beat) fall inside that.
-  - While the tempo is changing, or right after, ticks that match the fingerprint are still ignored, so there is no gap where the metronome leaks into the count.
-  - Tempo changes never reset the learned profile.
-- **Level changes.** The level tolerance is a wide band (±18 dB) around each cluster's learned peak level, so the student moving the metronome or the mic is tolerated. Spectral shape matters more than loudness. Fingerprints also record the upper band edge they were taken with (it only differs for sample rates below ~16.7 kHz, e.g. Bluetooth headsets); profiles with a different layout neither match nor merge.
-- **Playing over the metronome.** Sustained playing raises the duty cycle as before. Learned ticks inside that sound are not subtracted, because they don't need to be: the sustained sound is active on its own. Learned ticks still never reset the stop timer.
-- **Noise floor.** Learned ticks are excluded from the noise-floor estimate, so a long-running metronome doesn't push the threshold up or make the app think the room is noisy.
-- **Lifetime.** Learned metronomes are held in memory for the session. **Locked** (guided-learn) metronomes are also **saved across sessions** (see below). **Tentative** (auto-learned) clusters are session-only and are cleared on exit. Reset (the timer) does not clear any metronome profile. The status area shows `Metronomes: N saved`, plus `+ Metronome (auto)` when tentative ones exist.
+- **What is learned.** For each clean tick: a 24-band log-spectrum (100 Hz up to 7.5 kHz) taken over the whole burst, mean-subtracted and normalised, plus peak level and duration. Interval and tempo are *not* part of the fingerprint, so a tempo change needs no re-learning.
+- **When it learns.** Only from **clean ticks**: short bursts with ≥ 80 ms of quiet on both sides. Frames overlapping sustained playing are never used, so the instrument can't contaminate the template.
+- **Clusters.** Up to 3 spectral clusters per profile (cosine ≥ 0.9 merges), covering a tick/tock pair or an accented beat. Up to 4 profiles in the bank; the least recently matched tentative one is evicted first.
+- **Matching.** A short burst is ignored if its spectrum has cosine similarity ≥ 0.92 to a cluster of an enabled profile and its peak level is within ±18 dB of the cluster's learned peak. It does **not** need to fit the tempo grid, so tempo changes, a dropped beat or a restarted metronome are handled instantly. Non-matching bursts (a played note, a bump, speech) count as normal activity. Spectral shape matters more than loudness, so moving the metronome or the mic is tolerated.
+- **Band layout.** Fingerprints record the upper band edge they were taken with. It differs from the default only for sample rates below ~16.7 kHz (e.g. Bluetooth headsets); profiles with a different layout neither match nor merge.
+- **Noise floor.** Learned ticks are loud frames, so they never enter the noise-floor estimate; a long-running metronome doesn't make the app think the room is noisy.
+- **Lifetime.** **Locked** (guided-learn) profiles are saved across sessions. **Tentative** (auto-learned) profiles are session-only. Reset (the timer) clears no profile.
+- **Status.** `Metronomes: N saved`, plus `+ Metronome (auto)` when tentative ones exist, plus `(k learned on another mic)` when relevant.
 
 #### Saved metronomes (across sessions)
-A family usually has one or two metronomes, so a metronome only has to be taught once.
-- **Saving.** A successful guided learn saves the profile automatically to `%AppData%\PracticeTimer\metronomes.json`. The user can give it a name (default `Metronome 1`, `Metronome 2`, …) in a small prompt that can be skipped.
-- **Loading.** All saved metronomes are loaded at startup and active immediately, with no button press needed. The status shows `Metronomes: 2 saved`. Matching works like a locked cluster.
-- **Manage list.** A Settings section lists saved metronomes with name, learned BPM range and date. The user can rename, delete, enable or disable each, or **Forget all**. Disabled ones stay stored but are not used.
-- **Limit.** Up to 4 saved metronomes. Saving a fifth asks which to replace.
-- **Re-learning a known one.** If a guided learn matches a saved fingerprint, the app says `Already known: Metronome 1` and refines it slightly (averaged in) instead of adding a duplicate.
-- **Drift.** The same metronome can sound a bit different with a different mic, room or distance. If a saved metronome is clearly not matching (the guided learn finds a similar but separate sound), the user can simply learn again and delete the old one. Fingerprints are stored per mic device, and a saved metronome is flagged `learned on <mic>` when a different mic is selected. It is still used, but the user is nudged to re-learn if it doesn't seem to match.
-- **Stored data.** Only the numeric spectral fingerprint and summary statistics are stored (no audio). The file is small, human-readable JSON with a version field. A corrupt file is moved aside (`*.corrupt-<time>.json`) and ignored rather than crashing. A file from a newer build is moved aside intact (`*.newer-v<N>-<time>.json`). An older version is migrated, or read as-is when the change was additive. A file that is merely locked by another program is never treated as corrupt: it is retried, and if it stays unreadable the app starts with defaults but **refuses to save over it** (a message says so) until restarted. Entries with an unusable shape (wrong spectrum length, missing lists) are dropped on load. The same applies to `settings.json` and `history.json`.
-- **Forget auto** (main window) clears only the session's tentative clusters and un-loads nothing from disk. Deleting a saved metronome is done from the manage list.
-- **Guided "Learn metronome" flow** (the primary way to learn, to avoid mis-learning):
-  1. The student or parent starts the metronome, then presses **Learn metronome**.
-  2. State `Learning metronome…` shows with a progress ring and a live tick counter. The level meter colours ticks the filter recognises as the metronome (known fingerprint, or a locked-in pulse); the ring fills as clean ticks are counted.
-  3. The app listens until it has enough clean ticks (≥8, minimum ~4 s, timeout ~20 s) with consistent fingerprints and clean gaps. During learning it doesn't count time and ignores any sustained sound, and it asks the user to keep still ("Let the metronome run on its own").
-  4. **Success signal:** a short confirmation chime, a green check, and the text `Metronome learned (BPM ~72)`. The learned profile is marked **locked** (high confidence).
-  5. **Failure signals:** `Didn't hear a steady metronome` if it times out, and `Too much other sound, try again` if sustained sound was heard. Nothing is stored on failure.
-  6. Cancel is always available: the button reads **Cancel learning** while learning. Learning needs the Metronome filter on, so the button is disabled when it is off. Pressing **Learn metronome** again afterwards adds a cluster, which is useful for a second metronome.
-  On success the metronome is saved (see Saved metronomes). A **Forget auto** button clears the session's auto-learned clusters.
-- **Automatic learning is a fallback.** A setting, **Auto-learn metronome** (default on), lets the bootstrap above learn without the button. Auto-learned clusters are marked **tentative** and shown as `Metronome (auto)` in the status. They need more clean ticks than a guided learn (12 versus 8), never alter or merge into a locked profile (only a guided learn refines saved metronomes), are evicted before locked clusters, and are dropped if they match long sustained sound. If it is off, only the guided flow learns.
-- **Locked clusters** are never evicted by auto-learned ones and are only removed by the user from the saved-metronomes list.
-- **Failure modes to watch.** If the first "regular" sound the app hears is actually something else (e.g. repeated pizzicato at a steady tempo), it could learn a wrong fingerprint. The confidence threshold, the clean-gap requirement and the Forget button limit the damage. A learned cluster that matches a lot of long sustained sound is discarded.
-- **Tests.** Guided learn succeeds on a clean click train, times out with silence, and rejects sustained sound; tempo steps (60→90→45 BPM), a continuous accelerando, and a restart at a different tempo with no re-learning. Replay scenarios: metronome first then play; play then metronome; metronome off and on at a different tempo; tick/tock mechanical; accented digital beep; two different metronomes in one session; sustained or long plucked notes at a steady tempo are never learned. Very short regular plucks (< ~150 ms) *are* indistinguishable from ticks and are learned; this is the documented limit above and is pinned by a test.
+A family usually has one or two metronomes, so each only has to be taught once.
+- **Saving.** A successful guided learn saves the profile to `metronomes.json` and offers a name prompt (default `Metronome N`, lowest unused N) that can be skipped.
+- **Loading.** All saved metronomes are active immediately at startup.
+- **Manage list** (Settings). Name, learned BPM range, date, mic. Rename, enable/disable, delete, or **Forget all**. Edits are staged and applied only on OK. Disabled profiles stay stored but are not used.
+- **Limit.** 4 saved. When a fifth is taught the app asks which saved metronome to replace, or to discard the new one.
+- **Re-learning a known one.** If a guided learn matches a saved fingerprint the app says `Already known: <name>`, refines it (averaged in) and enables it if it was disabled.
+- **Per-mic.** Each profile records the mic it was learned on; when a different mic is selected it is flagged `learned on <mic>`. It is still used, but the user can re-learn and delete the old one if it stops matching.
+- **Forget auto** (main window) clears only the session's tentative profiles; nothing on disk changes.
+
+#### Guided "Learn metronome" flow (the primary way to learn)
+1. The student or parent starts the metronome, then presses **Learn metronome** (needs the Metronome filter on).
+2. `Learning metronome... n/8 ticks. Let it run on its own.` shows with a progress ring. The meter colours ticks the filter recognises. Time is not counted while learning, and sustained sound is rejected.
+3. The app listens until it has ≥ 8 clean ticks over ≥ 4 s with consistent fingerprints and a steady interval (±15%), or times out at 20 s. More than 1 s of sustained sound ends it with `Too much other sound`.
+4. **Success:** chime, green check, `Metronome learned (BPM ~72)`; the profile is **locked** and saved.
+5. **Failure:** `Didn't hear a steady metronome` (timeout) or `Too much other sound. Try again.` Nothing is stored.
+6. The button reads **Cancel learning** while learning and is always usable then. Learning again afterwards adds a profile, which is how a second metronome is taught. A mic change or loss mid-learn discards the learn with a message.
+
+#### Auto-learn (fallback)
+A setting, **Auto-learn metronomes** (default on), lets the bootstrap learn without the button. Auto-learned profiles are **tentative**, shown as `Metronome (auto)`. They need 12 steady clean ticks (more than a guided learn's 8), never alter or merge into a locked profile, are evicted before locked ones, and are dropped if they keep matching long sustained sound. If it is off, only the guided flow learns. Locked profiles are removed only by the user.
 
 ## Timer rules
-- Elapsed time is monotonic (use `Stopwatch`, not wall clock) and survives the UI thread being busy. Manual mode reads the `Stopwatch`; Auto mode is driven by audio sample timestamps, which are equally immune to clock changes. A new audio pipeline restarts its timestamps at zero, so the clock ends the current run (at its last active moment) before any pipeline swap, and treats a timestamp that runs backwards as the same event.
-- Pausing or switching to manual while Playing also drops the trailing quiet, and the goal chime never fires on time that would later be rolled back.
+- Elapsed time is monotonic (`Stopwatch`, not wall clock) and survives a busy UI thread. Manual mode reads the stopwatch; Auto mode is driven by audio sample timestamps, which are equally immune to clock changes.
+- A new audio pipeline restarts its timestamps at zero. The clock therefore ends the current run (at its last active moment) before any pipeline swap, learn or calibration, and treats a timestamp that runs backwards as the same event. The gap is never credited.
+- Pausing, switching to manual, saving and the goal all use the **credited** time, which excludes trailing quiet. The goal chime and "Goal reached" never fire on time that would later be rolled back.
 - Manual Start and Pause always override. If the user pauses in Auto mode, the listener is disarmed until Start.
-- Reset stops the clock and clears the elapsed time. If elapsed time is more than a few seconds, ask the user to confirm and offer to save it to history.
-- Mic lost or unplugged: pause, show a visible warning, and don't crash. The warning stays until the user presses Start, picks a microphone, or starts learning/calibration, even if the app falls back to another microphone. A microphone that silently stops delivering audio (no data for 2.5 s) is treated the same way. The remembered microphone is switched back to when it returns.
-- Sleep pauses a running timer; resume reopens the microphone (the old stream is usually dead). Manual mode is not paused by microphone problems, since it doesn't use the microphone.
+- Reset stops the clock and clears the time. If more than a few seconds elapsed, it asks whether to save the session (Yes / No / Cancel).
+- Sleep pauses a running timer; resume reopens the microphone (the old stream is usually dead).
+
+## Reliability
+Things the app must keep doing, because earlier versions got them wrong:
+- **Microphone problems.** If the active device is removed, errors out, or stops delivering audio (2.5 s after data was flowing; 10 s allowed for a device's first block), an Auto timer **pauses** with a visible warning that stays until the user presses Start, picks a microphone, or starts learning or calibration, even if the app has fallen back to another microphone. A Manual timer keeps running (it doesn't use the mic), but the warning still shows. The remembered microphone is switched back to when it returns. Re-pressing Start retries a mic that wouldn't open.
+- **Never overwrite what couldn't be read.** If a data file is locked at startup, the app runs with defaults and **refuses to save over it** (a message says so) until restarted. Startup also does not rewrite settings.
+- **Never destroy unusable files.** A corrupt file is moved aside (`*.corrupt-<time>.json`); a file from a newer build is moved aside intact (`*.newer-v<N>-<time>.json`); an older version is migrated, or read as-is when the change was additive. Entries with an unusable shape (wrong spectrum length, missing lists) are dropped on load, and loaded settings are clamped to valid ranges (including NaN).
+- **Atomic, durable writes.** Write to `<file>.tmp`, flush to disk, swap in with `File.Replace`. Settings that change continuously (dragging the trigger line, typing a goal) are written about a second after the last change and on exit.
+- **Save failures are not fatal.** A failed write shows a message; history keeps the session in memory and the next successful save includes it. CSV export failures show a message.
+- **Closing saves.** A session of at least 3 s is saved automatically on window close and Windows logoff or shutdown (no prompt), then the clock is reset so it can't be saved twice.
+- **Single instance.** A second launch asks the running instance to show its window and exits (two copies would overwrite each other's history). The second launch builds no window of its own.
+- **Startup failure.** If the main window can't be created the error is logged and shown and the process exits; a windowless instance would block every later launch.
+- **Unhandled errors.** UI exceptions are appended to `%AppData%\PracticeTimer\error.log`; the user is told once and the app keeps running. Capture-thread errors are logged too.
+
+## Threading and data ownership
+- The **audio callback thread** owns the `AudioPipeline`: frame slicing, detection, learning and clock updates all run there under the pipeline's lock.
+- The **UI thread** polls every 40 ms through `TakeSnapshot()`, which returns the peak level and strongest frame tag since the previous poll, so a one-frame click still reaches the meter. It never reads detector internals directly.
+- **`FingerprintBank`** is shared by both threads: it locks internally, hands out snapshot copies (`Profiles`, `Summary`), and takes edits only through `ApplyEdits`, `SetMic`, `Remove` and `ClearTentative`.
+- **`PracticeClock`** is called from both threads under its own lock and raises `StateChanged` after releasing it, so a subscriber may call back in. Lock order is pipeline → clock → bank; the UI thread never takes them in reverse.
+- `MicCapture` raises `Stopped` only for the *current* capture, never for one the app ended itself, so a stale event can't hit a newer capture.
+- A pipeline replaced by a mic change is discarded; learn results from it are ignored.
 
 ## Session log / history
-- A session of at least 3 s is saved when the user confirms it on Reset, and **automatically** on app close or Windows logoff/shutdown (no prompt).
-- Fields: date, start time, duration, mode (manual or auto), optional instrument label, optional note (both entered on the main window).
-- History window: list by day with daily and weekly totals, delete an entry, and export to CSV (UTF-8 with BOM; durations don't wrap at 24 h; cells starting with `=`, `+`, `-` or `@` are prefixed with `'`). If a write fails the session stays in memory, a message is shown, and the next successful save includes it.
-- The instrument label is a free-text combo box that remembers previous entries (violin, piano, etc.).
+- Fields: date, start time, duration, mode (manual or auto), optional instrument, optional note.
+- A session shorter than 3 s is not saved. Saving happens on Reset (after confirmation) and automatically on close (see Reliability).
+- History window: list by day with daily and weekly totals (Monday-start weeks), delete an entry, export to CSV. Columns sort by value.
+- CSV: UTF-8 with BOM; durations don't wrap at 24 h; cells starting with `=`, `+`, `-` or `@` are prefixed with `'`.
+- The instrument box is a free-text combo that remembers previous entries (most recent first).
 
 ## Settings
-- Mic device (on the main window)
-- Start delay, stop delay, sensitivity, and the Calibrate button
-- Chime on/off (the goal itself is set on the main window)
-- Always on top, minimize to tray, start minimized
-- Theme: light or dark, plus a larger-text option
+- Start delay (0.3–5 s), stop delay (1–30 s), sensitivity margin (4–30 dB), sparse-playing duty threshold (5–60%), Calibrate
+- Ignore metronome ticks (filter), Auto-learn metronomes, saved-metronome list
+- Chime on/off (the goal itself and the microphone are on the main window)
+- Always on top, minimize to tray, start minimized (hides only if the tray icon is on; otherwise minimizes to the taskbar)
+- Theme: System (default), Light or Dark; larger-text option (window minimum size scales with it)
+- Privacy statement
+- OK applies and saves; Cancel discards everything including metronome edits.
 
-## Implementation notes
-- **Threads.** The audio callback thread runs the pipeline (clock updates, detection, learning). The UI thread polls the pipeline every 40 ms through `TakeSnapshot()`, which returns the peak level and the strongest frame tag since the last poll, so a one- or two-frame click still shows on the meter. `FingerprintBank` locks internally and returns snapshot copies; edits go through `ApplyEdits`, `SetMic` and `Remove`. `PracticeClock` raises its events after releasing its lock.
-- **Settings window.** Metronome renames, enable flags and deletions (including Forget all) are staged and applied only on OK.
-- **Saving.** Writes go to `<file>.tmp`, are flushed to disk, then swapped in with `File.Replace`. Settings changed continuously (dragging the trigger line, typing a goal) are written about a second after the last change and on exit. Save failures show a message and never crash the app. Loaded settings are clamped to valid ranges.
-- **Startup failure.** If the main window can't be created, the error is logged, shown, and the process exits; a windowless instance would otherwise block every later launch.
-- **Theme.** Each window sets its own Background/Foreground from the theme resources (implicit `Window` styles don't apply to derived window classes); text inherits the foreground.
-- **Single instance.** A second launch asks the running instance to show its window and exits, so two copies can't overwrite each other's history.
-- **Errors.** Unhandled UI exceptions are appended to `%AppData%\PracticeTimer\error.log`; the user is told once and the app keeps running.
-- **Start minimized** hides to the tray only when "Minimize to tray" is on; otherwise the window starts minimized to the taskbar.
-- **Known limits.** Very short, very regular notes (staccato/pizzicato under ~150 ms) are treated as a metronome by design (see above). `LoudnessDetector` is not yet fully hidden behind `IActivityDetector`: the pipeline also reads its floor, periodicity and learning hooks.
+## Parameters
+Defaults live in code; "User" means adjustable in the UI.
+
+| Parameter | Value | User | Where |
+|---|---|---|---|
+| Frame length | 25 ms | no | `AudioPipeline` |
+| Noise floor window / percentile | 400 frames (~10 s), 10th | no | `NoiseFloorEstimator` |
+| Floor before 20 frames | −60 dBFS | no | `NoiseFloorEstimator` |
+| Calibration length / percentile | 3 s, 90th (+ bias) | no | `AudioPipeline` |
+| Sensitivity margin | 12 dB (4–30) | yes | `DetectorSettings` |
+| Absolute minimum trigger | −55 dBFS | via trigger line | `DetectorSettings` |
+| Hysteresis | 3 dB | no | `LoudnessGate` |
+| Start / stop delay | 1 s / 5 s | yes | `PracticeClock` |
+| Detector hangover | 500 ms | no | `DetectorSettings` |
+| Short-burst limit / close gap | 150 ms / 50 ms | no | `BurstTracker` |
+| Duty window / threshold | 2.5 s / 20% | threshold only | `DetectorSettings` |
+| Periodicity: ticks / tolerance / range / hold | 4 / ±12% / 0.24–2 s / 3 s | no | `PeriodicityTracker` |
+| Clean gap | 80 ms | no | `LoudnessDetector` |
+| Steady-noise rule | 30 s run, ≤ 6 dB over 10 s | no | `LoudnessDetector` |
+| Fingerprint | 24 bands, 100 Hz–7.5 kHz | no | `BandSpectrum` |
+| Match / merge / cluster cosine | 0.92 / 0.90 / 0.90 | no | `FingerprintBank`, `TickClusterer` |
+| Level tolerance | ±18 dB | no | `FingerprintBank` |
+| Profiles / clusters per profile | 4 / 3 | no | `FingerprintBank` |
+| Sustained matches before a tentative profile is dropped | 3 | no | `FingerprintBank` |
+| Guided learn: ticks / min / timeout / max sustained | 8 / 4 s / 20 s / 1 s | no | `GuidedLearnSession` |
+| Auto-learn ticks | 12 | no | `AutoLearner` |
+| Mic watchdog | 2.5 s (10 s before first data) | no | `MainViewModel` |
+| Settings save debounce | 1 s | no | `MainViewModel` |
+| Minimum saved session | 3 s | no | `SessionRecorder` |
+| UI poll | 40 ms | no | `MainViewModel` |
 
 ## Privacy
-- Audio is processed in memory only, never recorded, saved, or sent anywhere. Only levels and a numeric spectral fingerprint of the metronome are computed, and the fingerprint (not audio) is what gets saved. State this in the UI (e.g. in About).
-- No network access. No account.
+- Audio is processed in memory only, never recorded, saved, or sent anywhere. Only levels and a numeric spectral fingerprint of each taught metronome are computed, and the fingerprint (not audio) is what gets saved.
+- The Settings > Window tab states this in the UI. No network access. No account.
+
+## Known deviations and limits
+- **Short regular notes look like a metronome.** Staccato or pizzicato under ~150 ms at a very steady tempo is treated as ticks (and can even be auto-learned as a tentative metronome). Long or ringing notes are not. The Metronome filter checkbox is the escape hatch; a test pins this behaviour.
+- **A loud mechanical metronome** next to the mic raises the noise floor margin slightly.
+- **Steady loud sustained sound** (a drone held 30 s with < 6 dB variation) is eventually treated as room noise.
+- **`IActivityDetector` is not fully respected:** the pipeline also reads `LoudnessDetector`'s floor, periodicity and learning hooks.
+- **Sensitivity slider** is in Settings, not on the main window (the draggable trigger line is).
+- **Fingerprints are not portable across sample rates below ~16.7 kHz** or, in practice, across very different mics or rooms; re-learn.
+- Today's total counts saved sessions only.
+- Speech is not filtered, by decision.
 
 ## Non-goals (v1)
 - Telling pieces, notes, or instruments apart, or judging quality
@@ -154,25 +202,33 @@ tests/PracticeTimer.Core.Tests/   xUnit, synthetic audio (Signals/SignalGen.cs)
 ```
 
 ## Testing
-- The clock state machine and loudness detector are unit-tested with synthetic level sequences (silence, steady tone, bursts, gaps shorter and longer than the stop delay).
-- Manual test checklist: device switching, unplug during run, noisy room, quiet instrument (e.g. a soft violin), speech nearby.
+- **Automated (Core, runs on Linux):** the clock state machine (manual and auto, including backwards time, interrupts, trailing-quiet rollback, goal); the detector and noise floor (synthetic silence, tones, bursts, gaps either side of the stop delay, steady noise, varied-level calibration); click trains at several BPMs and 50 ms beeps; metronome learning (guided and auto, tempo steps, accelerando, restart at a new tempo, tick/tock, accent, two metronomes, off/on, level change, disabled/blank edits, locked profiles untouched by auto-learn, band-layout mismatch); bank concurrency; persistence (round trip, corrupt, newer/older version, locked file, unusable entries, envelope-key collisions, sanitising, failed writes); history aggregation and CSV.
+- **Manual checklist (Windows):** device switching, unplug during a run, sleep and resume, noisy room, a quiet instrument (soft violin), speech nearby, two copies launched, locked data file, dark theme, mixed-DPI monitors, start minimized with and without the tray.
+- The WPF layer is compiled in CI-style builds but has no automated UI tests.
+
+## Validation and acceptance targets
+The thresholds were chosen with synthetic audio only. These **targets** define "good enough" once real recordings (mechanical and digital metronomes, and the actual instrument with and without them) are available; none has been measured yet.
+
+| Scenario | Target |
+|---|---|
+| Quiet room, Auto armed, 30 min | No false start; ≤ 2 s credited |
+| Metronome alone, 10 min (taught) | 0 s credited |
+| Metronome alone, 10 min (never taught, auto-learn on) | ≤ 5 s credited before the fingerprint locks, then 0 |
+| Quiet playing 15 dB above the room | ≥ 95% of playing time credited |
+| Rest of 5 s or more during playing | Excluded to within ±1 s |
+| Metronome running while resting between phrases | Rests not credited (±1 s per rest) |
+| Metronome over playing | No more than 2% extra credited vs. no metronome |
+| Room noise steps up 15 dB | Stops crediting within 45 s without recalibrating |
 
 ## Decisions
 - Trailing quiet is removed from the total on auto-pause.
 - Single student. Parent playing or video examples count as practice.
 - Metronomes (mechanical and digital) are filtered out.
 - Windows 11 only, plain portable `.exe`.
+- Closing saves the session automatically; Reset asks.
+- Locked metronomes change only through a guided learn or the user's own edits.
 
-## Open questions
-1. Any app name, icon or colour preferences? Placeholder name: "Practice Timer".
-2. Can you record 20–30 s samples of your actual metronomes (mechanical and digital), and the instrument being played with and without them? They'd let me tune the filter against reality. If not, I'll use synthetic signals and sensible defaults.
-
-## Milestones
-1. Skeleton WPF app with manual stopwatch, plus tests for the clock
-2. Mic enumeration, level meter, loudness detector, auto mode
-2b. Metronome filter (burst shape, duty cycle, periodicity), tuned against recordings
-2c. Per-session metronome learning (fingerprints, guided Learn flow with success signal, Forget button, tempo-change handling)
-2d. Saved metronomes (MetronomeStore, auto-load at startup, manage list, per-mic flag)
-3. Settings, calibration, and persistence
-4. Goal, tray, and always-on-top
-5. History, CSV export, and packaging
+## Open items
+1. **Real recordings.** 20–30 s samples of the actual metronomes (mechanical and digital), and the instrument played with and without them, to tune the filter and check the acceptance targets above.
+2. **App name and icon.** Placeholder name "Practice Timer"; no icon.
+3. **Candidate features** are tracked outside this spec; anything adopted gets added here with its behaviour.

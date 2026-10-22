@@ -34,7 +34,7 @@ SDK 10 is pinned in `global.json`; the app targets `net8.0-windows` and is cross
   does it immediately.
 - Files are written atomically; corrupt or newer-format files are set aside, never deleted, and a file that is locked
   at startup is never overwritten with defaults. See
-  [SPEC.md](SPEC.md#implementation-notes) for details and known limits.
+  [SPEC.md](SPEC.md#reliability) for details and known limits.
 - Only one copy runs at a time. Unexpected errors are logged to `%AppData%\PracticeTimer\error.log`.
 
 Data lives in `%AppData%\PracticeTimer` (`settings.json`, `history.json`, `metronomes.json`). Audio is never stored.
