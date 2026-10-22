@@ -96,3 +96,47 @@ public static class HistoryCsvWriter
         return v.IndexOfAny(new[] { ',', '"', '\n', '\r' }) >= 0 ? "\"" + v.Replace("\"", "\"\"") + "\"" : v;
     }
 }
+
+/// <summary>Remembers when a practice session began and turns the clock's total into a history entry.</summary>
+public sealed class SessionRecorder
+{
+    private readonly HistoryStore _history;
+    private readonly Func<DateTime> _now;
+    private readonly double _minSeconds;
+    private DateTime? _start;
+    private bool _auto;
+
+    public SessionRecorder(HistoryStore history, Func<DateTime> now, double minSeconds = 3)
+    {
+        _history = history;
+        _now = now;
+        _minSeconds = minSeconds;
+    }
+
+    public void Attach(Timing.PracticeClock clock) => clock.StateChanged += state =>
+    {
+        if (state == Timing.ClockState.Stopped) { _start = null; _auto = false; return; }
+        if (state is Timing.ClockState.ManualPaused or Timing.ClockState.PausedQuiet) return;
+        _start ??= _now();
+        _auto |= state is Timing.ClockState.Listening or Timing.ClockState.Playing;
+    };
+
+    /// <summary>Saves the clock's current total as a session, if long enough, and starts a fresh one.</summary>
+    public SessionRecord? Save(Timing.PracticeClock clock, string? instrument, string? note)
+    {
+        var elapsed = clock.Elapsed.TotalSeconds;
+        var start = _start ?? _now() - TimeSpan.FromSeconds(elapsed);
+        var auto = _auto;
+        _start = null;
+        _auto = false;
+        if (elapsed < _minSeconds) return null;
+        var rec = new SessionRecord
+        {
+            Start = start, DurationSeconds = elapsed, Mode = auto ? "Auto" : "Manual",
+            Instrument = string.IsNullOrWhiteSpace(instrument) ? null : instrument.Trim(),
+            Note = string.IsNullOrWhiteSpace(note) ? null : note.Trim(),
+        };
+        _history.Add(rec);
+        return rec;
+    }
+}
