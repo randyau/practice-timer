@@ -62,7 +62,7 @@
                 <StackPanel Margin="16">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="Theme" VerticalAlignment="Center" Width="100" />
-                        <ComboBox Width="140" SelectedValuePath="Content" SelectedValue="{Binding Theme}">
+                        <ComboBox Foreground="#1B1F24" Width="140" SelectedValuePath="Content" SelectedValue="{Binding Theme}">
                             <ComboBoxItem Content="System" />
                             <ComboBoxItem Content="Light" />
                             <ComboBoxItem Content="Dark" />

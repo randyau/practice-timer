@@ -70,9 +70,6 @@
         </Style>
         <Style TargetType="DataGridRowHeader"><Setter Property="Background" Value="{DynamicResource Bg}" /></Style>
 
-        <!-- The stock ComboBox draws a light box whatever the theme, so its text stays dark to remain readable on it. -->
-        <Style TargetType="ComboBox"><Setter Property="Foreground" Value="#1B1F24" /></Style>
-        <Style TargetType="ComboBoxItem"><Setter Property="Foreground" Value="#1B1F24" /></Style>
         <Style TargetType="Button">
             <Setter Property="Foreground" Value="{DynamicResource Fg}" />
             <Setter Property="Background" Value="{DynamicResource Panel}" />

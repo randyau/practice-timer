@@ -160,8 +160,22 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     // ----- lifecycle -----
     public void Start()
     {
-        RefreshDevices();
+        // The timer drives the meter and status, so it starts first: a failure finding microphones must not leave the window dead.
         _timer.Start();
+        TryRefreshDevices();
+    }
+
+    private DateTime _nextDeviceRetry;
+
+    private void TryRefreshDevices()
+    {
+        _nextDeviceRetry = DateTime.Now.AddSeconds(2);
+        try { RefreshDevices(); }
+        catch (Exception ex)
+        {
+            App.Log(ex);
+            _micError = "Can't list microphones: " + ex.Message;
+        }
     }
 
     public void RefreshDevices()
@@ -475,6 +489,8 @@ public sealed class MainViewModel : ObservableBase, IDisposable
             HandleMicLost("The microphone stopped sending audio.");
             _micError = "Microphone not responding. Press Start to retry.";
         }
+        // With no microphone open, keep looking so the list fills in without the user having to press Start.
+        if (_pipeline == null && _micNotice == null && DateTime.Now >= _nextDeviceRetry) TryRefreshDevices();
         var e = Clock.Elapsed;
         ElapsedText = $"{(int)e.TotalHours:00}:{e.Minutes:00}:{e.Seconds:00}";
         IsRunning = Clock.State is ClockState.ManualRunning or ClockState.Listening or ClockState.Playing or ClockState.PausedQuiet;
