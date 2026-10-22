@@ -6,18 +6,25 @@ namespace PracticeTimer.Core.Detection;
 public sealed class LoudnessDetector : IActivityDetector
 {
     private readonly DetectorSettings _s;
-    private readonly BandSpectrum _spectrum;
     private readonly LoudnessGate _gate = new();
     private readonly BurstTracker _bursts;
     private readonly Queue<(TimeSpan End, TimeSpan Loud)> _duty = new();
     private TimeSpan _holdUntil = TimeSpan.MinValue;
 
-    public LoudnessDetector(int sampleRate, DetectorSettings? settings = null, int frameSamples = 0)
+    private static readonly TimeSpan CleanGap = TimeSpan.FromMilliseconds(80);
+    private Burst? _pendingClean;
+    private bool _pendingMatched;
+
+    public LoudnessDetector(int sampleRate, DetectorSettings? settings = null, FingerprintBank? bank = null)
     {
         _s = settings ?? new DetectorSettings();
-        _spectrum = new BandSpectrum(sampleRate, frameSamples > 0 ? frameSamples : (int)Math.Round(sampleRate * 0.025));
         _bursts = new BurstTracker(_s.ShortBurstMax);
+        Bank = bank ?? new FingerprintBank();
     }
+
+    public FingerprintBank Bank { get; }
+    public bool SustainedOpen => _bursts.IsSustained;
+    public event Action<CleanTick>? CleanTick;
 
     public NoiseFloorEstimator Floor { get; } = new();
     public PeriodicityTracker Periodicity { get; } = new();
@@ -33,7 +40,8 @@ public sealed class LoudnessDetector : IActivityDetector
 
         if (!_s.MetronomeFilterEnabled) return Emit(now, db, loud, loud, false);
 
-        var closed = _bursts.Update(frame, loud, db, () => _spectrum.Compute(frame.Samples));
+        ReleaseCleanTick(now, loud);
+        var closed = _bursts.Update(frame, loud, db);
         var active = false;
         var metronome = false;
 
@@ -41,9 +49,17 @@ public sealed class LoudnessDetector : IActivityDetector
         {
             active = true;
         }
+        else if (closed is { Sustained: true })
+        {
+            Bank.NoteSustained(closed.Spectrum);
+            _pendingClean = null;
+        }
         else if (closed is { Sustained: false })
         {
-            metronome = Periodicity.Observe(closed.Onset);
+            var matched = Bank.Match(closed.Spectrum, closed.PeakDb) != null;
+            var periodic = Periodicity.Observe(closed.Onset);
+            metronome = matched || periodic;
+            if (closed.GapBefore >= CleanGap) { _pendingClean = closed; _pendingMatched = matched; }
             if (!metronome)
             {
                 AddDuty(now, closed.Duration);
@@ -51,6 +67,16 @@ public sealed class LoudnessDetector : IActivityDetector
             }
         }
         return Emit(now, db, loud, active, metronome);
+    }
+
+    private void ReleaseCleanTick(TimeSpan now, bool loud)
+    {
+        if (_pendingClean == null) return;
+        if (loud) { _pendingClean = null; return; }
+        if (now - _pendingClean.End < CleanGap) return;
+        var tick = new CleanTick(_pendingClean, _pendingMatched);
+        _pendingClean = null;
+        CleanTick?.Invoke(tick);
     }
 
     private ActivitySample Emit(TimeSpan now, double db, bool loud, bool active, bool metronome)
@@ -75,6 +101,7 @@ public sealed class LoudnessDetector : IActivityDetector
         _bursts.Reset();
         Periodicity.Reset();
         _duty.Clear();
+        _pendingClean = null;
         _holdUntil = TimeSpan.MinValue;
     }
 }

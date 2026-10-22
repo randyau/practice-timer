@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Numerics;
 
 namespace PracticeTimer.Core.Analysis;
@@ -21,30 +22,67 @@ public sealed class BandSpectrum
         _window = new double[frameSamples];
         for (var i = 0; i < frameSamples; i++)
             _window[i] = 0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (frameSamples - 1));
-        hiHz = Math.Min(hiHz, sampleRate * 0.45);
-        _edges = new int[Bands + 1];
-        var binHz = (double)sampleRate / _fft;
-        for (var b = 0; b <= Bands; b++)
-        {
-            var hz = loHz * Math.Pow(hiHz / loHz, (double)b / Bands);
-            _edges[b] = Math.Max(1, (int)Math.Round(hz / binHz));
-            if (b > 0 && _edges[b] <= _edges[b - 1]) _edges[b] = _edges[b - 1] + 1;
-        }
+        _edges = Edges(_fft, sampleRate, loHz, hiHz);
     }
 
-    public double[] Compute(float[] samples)
+    private static readonly ConcurrentDictionary<(int, int), int[]> EdgeCache = new();
+
+    private static int[] Edges(int fft, int sampleRate, double loHz = 100, double hiHz = 7500) =>
+        EdgeCache.GetOrAdd((fft, sampleRate), _ =>
+        {
+            hiHz = Math.Min(hiHz, sampleRate * 0.45);
+            var edges = new int[Bands + 1];
+            var binHz = (double)sampleRate / fft;
+            for (var b = 0; b <= Bands; b++)
+            {
+                var hz = loHz * Math.Pow(hiHz / loHz, (double)b / Bands);
+                edges[b] = Math.Max(1, (int)Math.Round(hz / binHz));
+                if (b > 0 && edges[b] <= edges[b - 1]) edges[b] = edges[b - 1] + 1;
+            }
+            return edges;
+        });
+
+    /// <summary>
+    /// Fingerprint of a whole burst from one rectangular-window FFT over its frames. Analysing the burst as a unit,
+    /// not frame by frame, keeps the shape independent of where a click falls against the frame grid.
+    /// </summary>
+    public static double[] BurstFingerprint(float[] samples, int sampleRate)
+    {
+        var fft = 256;
+        while (fft < samples.Length) fft <<= 1;
+        var buf = new Complex[fft];
+        for (var i = 0; i < samples.Length; i++) buf[i] = samples[i];
+        Fft(buf);
+        var edges = Edges(fft, sampleRate);
+        var v = new double[Bands];
+        for (var b = 0; b < Bands; b++)
+            for (var k = edges[b]; k < edges[b + 1] && k < fft / 2; k++)
+                v[b] += buf[k].Real * buf[k].Real + buf[k].Imaginary * buf[k].Imaginary;
+        return FromEnergies(v);
+    }
+
+    public double[] Compute(float[] samples) => FromEnergies(Energies(samples));
+
+    /// <summary>Linear band energies. Sum these across a burst's frames before <see cref="FromEnergies"/>
+    /// so the fingerprint does not depend on where the click falls against the frame grid.</summary>
+    public double[] Energies(float[] samples)
     {
         for (var i = 0; i < _fft; i++)
             _buf[i] = i < _frameSamples && i < samples.Length ? samples[i] * _window[i] : Complex.Zero;
         Fft(_buf);
         var v = new double[Bands];
         for (var b = 0; b < Bands; b++)
-        {
-            double e = 0;
-            for (var k = _edges[b]; k < _edges[b + 1] && k < _fft / 2; k++) e += _buf[k].Real * _buf[k].Real + _buf[k].Imaginary * _buf[k].Imaginary;
-            v[b] = Math.Log10(e + 1e-12);
-        }
-        return Normalize(v);
+            for (var k = _edges[b]; k < _edges[b + 1] && k < _fft / 2; k++)
+                v[b] += _buf[k].Real * _buf[k].Real + _buf[k].Imaginary * _buf[k].Imaginary;
+        return v;
+    }
+
+    /// <summary>Log shape with bands clamped 35 dB below the loudest, so noise-only bands don't dominate the match.</summary>
+    public static double[] FromEnergies(double[] energies)
+    {
+        var log = energies.Select(e => Math.Log10(e + 1e-12)).ToArray();
+        var floor = log.Max() - 3.5;
+        return Normalize(log.Select(x => Math.Max(x, floor)).ToArray());
     }
 
     public static double[] Normalize(double[] v)

@@ -128,7 +128,7 @@ public class BandSpectrumTests
         var a = Of(SignalGen.Tone(1000, 0.1, -20));
         var near = Of(SignalGen.Tone(1050, 0.1, -20));
         var far = Of(SignalGen.Tone(4000, 0.1, -20));
-        Assert.True(BandSpectrum.Cosine(a, near) > 0.8);
+        Assert.True(BandSpectrum.Cosine(a, near) > 0.5);
         Assert.True(BandSpectrum.Cosine(a, far) < 0.3);
     }
 

@@ -15,7 +15,9 @@ public sealed class BurstTracker
     private bool _open;
     private TimeSpan _onset, _lastLoudEnd, _prevEnd = TimeSpan.FromMinutes(-10), _gapBefore, _quiet;
     private double _peak;
-    private double[]? _sum;
+    private readonly List<float[]> _samples = new();
+    private int _rate;
+    private const int MaxFingerprintFrames = 8;
 
     public BurstTracker(TimeSpan? shortMax = null, TimeSpan? closeGap = null)
     {
@@ -27,7 +29,7 @@ public sealed class BurstTracker
     public bool IsSustained => _open && OpenDuration > _shortMax;
 
     /// <summary>Returns the burst that closed on this frame, if any.</summary>
-    public Burst? Update(AudioFrame frame, bool loud, double dbfs, Func<double[]> spectrum)
+    public Burst? Update(AudioFrame frame, bool loud, double dbfs)
     {
         if (loud)
         {
@@ -37,13 +39,13 @@ public sealed class BurstTracker
                 _onset = frame.Start;
                 _gapBefore = frame.Start - _prevEnd;
                 _peak = double.MinValue;
-                _sum = null;
+                _samples.Clear();
             }
             _lastLoudEnd = frame.End;
             _quiet = TimeSpan.Zero;
             _peak = Math.Max(_peak, dbfs);
-            var s = spectrum();
-            _sum = _sum == null ? (double[])s.Clone() : _sum.Zip(s, (a, b) => a + b).ToArray();
+            _rate = frame.SampleRate;
+            if (_samples.Count < MaxFingerprintFrames) _samples.Add(frame.Samples);
             return null;
         }
         if (!_open) return null;
@@ -52,7 +54,7 @@ public sealed class BurstTracker
         _open = false;
         _prevEnd = _lastLoudEnd;
         var dur = _lastLoudEnd - _onset;
-        return new Burst(_onset, dur, _peak, BandSpectrum.Normalize(_sum!), _gapBefore, dur > _shortMax);
+        return new Burst(_onset, dur, _peak, BandSpectrum.BurstFingerprint(_samples.SelectMany(f => f).ToArray(), _rate), _gapBefore, dur > _shortMax);
     }
 
     public void Reset()

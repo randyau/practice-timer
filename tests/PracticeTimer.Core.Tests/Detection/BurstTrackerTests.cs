@@ -14,7 +14,7 @@ public class BurstTrackerTests
         for (var n = 0; n < count; n++, _i++)
         {
             var f = new AudioFrame(TimeSpan.FromMilliseconds(25 * _i), new float[400], 16000);
-            var b = _t.Update(f, loud, db, () => new double[] { 1, 0 });
+            var b = _t.Update(f, loud, db);
             if (b != null) _closed.Add(b);
         }
     }
