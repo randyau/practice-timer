@@ -3,9 +3,18 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>PracticeTimer</AssemblyName>
+    <RootNamespace>PracticeTimer</RootNamespace>
+    <ApplicationIcon />
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
   </PropertyGroup>
   <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+    <PackageReference Include="NAudio" Version="2.2.1" />
     <ProjectReference Include="..\PracticeTimer.Core\PracticeTimer.Core.csproj" />
   </ItemGroup>
 </Project>

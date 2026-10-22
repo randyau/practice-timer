@@ -1,6 +1,0 @@
-<Window x:Class="PracticeTimer.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Practice Timer" Height="360" Width="480">
-    <Grid />
-</Window>

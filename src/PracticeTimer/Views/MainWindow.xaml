@@ -1,0 +1,79 @@
+<Window x:Class="PracticeTimer.Views.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:v="clr-namespace:PracticeTimer.Views"
+        Title="Practice Timer" Width="540" Height="640" MinWidth="460" MinHeight="560"
+        WindowStartupLocation="CenterScreen" FontFamily="Segoe UI">
+    <Grid x:Name="Root" Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+            <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}" Padding="8,6"
+                      ToolTip="Microphone to listen with" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="12,0,0,0" VerticalAlignment="Center">
+                <RadioButton Content="Auto-listen" IsChecked="{Binding IsAuto}" Margin="0,0,10,0" ToolTip="Clock runs only while it hears playing" />
+                <RadioButton Content="Manual" IsChecked="{Binding IsAuto, Converter={x:Static v:InverseBool.Instance}}" ToolTip="Plain stopwatch" />
+            </StackPanel>
+        </Grid>
+
+        <StackPanel Grid.Row="1" Margin="0,18,0,0">
+            <TextBlock Text="{Binding ElapsedText}" FontSize="88" FontWeight="Light" HorizontalAlignment="Center" FontFamily="Segoe UI Light" />
+            <TextBlock Text="{Binding StatusText}" FontSize="15" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center"
+                       Foreground="{DynamicResource Muted}" Margin="0,2,0,0" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,18,0,0">
+            <Button Style="{StaticResource Primary}" Content="{Binding StartPauseLabel}" Width="150" FontSize="20" Click="StartPause_Click" />
+            <Button Content="Reset" Width="110" FontSize="20" Margin="12,0,0,0" Click="Reset_Click" />
+        </StackPanel>
+
+        <Border Grid.Row="3" Margin="0,22,0,0" Padding="12" CornerRadius="10" Background="{DynamicResource Panel}"
+                BorderBrush="{DynamicResource Border}" BorderThickness="1">
+            <StackPanel>
+                <v:LevelMeter Height="22" Level="{Binding Level}" Threshold="{Binding Threshold}" Floor="{Binding Floor}" Kind="{Binding Tag}" />
+                <Grid Margin="0,6,0,0">
+                    <TextBlock Text="Green = playing, blue = metronome (ignored), red line = trigger level" FontSize="11" Foreground="{DynamicResource Muted}" />
+                    <TextBlock Text="{Binding TempoText}" FontSize="11" HorizontalAlignment="Right" Foreground="{DynamicResource Muted}" />
+                </Grid>
+                <Grid Margin="0,10,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding MetronomeText}" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    <Button Grid.Column="1" Content="Learn metronome" Padding="10,5" Margin="8,0,0,0" Click="Learn_Click"
+                            ToolTip="Start your metronome, then press this and let it run for a few seconds" />
+                    <Button Grid.Column="2" Content="Forget auto" Padding="10,5" Margin="8,0,0,0" Click="Forget_Click"
+                            ToolTip="Clear metronomes the app picked up by itself this session" />
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="4" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <TextBlock Text="{Binding GoalText}" VerticalAlignment="Center" Width="120" />
+            <ProgressBar Grid.Column="1" Height="12" Maximum="1" Value="{Binding GoalProgress}" />
+        </Grid>
+
+        <Grid Grid.Row="5" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+            <TextBlock Text="Instrument" VerticalAlignment="Center" Width="120" />
+            <ComboBox Grid.Column="1" IsEditable="True" Text="{Binding Instrument, UpdateSourceTrigger=PropertyChanged}"
+                      ItemsSource="{Binding Instruments}" />
+        </Grid>
+
+        <TextBlock Grid.Row="6" Text="{Binding TodayText}" Margin="0,14,0,0" Foreground="{DynamicResource Muted}" VerticalAlignment="Top" />
+
+        <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+            <Button Content="History" Padding="12,6" Click="History_Click" />
+            <Button Content="Settings" Padding="12,6" Margin="8,0,0,0" Click="Settings_Click" />
+        </StackPanel>
+    </Grid>
+</Window>
