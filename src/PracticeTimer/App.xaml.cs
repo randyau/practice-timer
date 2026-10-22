@@ -109,12 +109,15 @@ public partial class App : Application
     {
         var dark = IsDark(theme);
         var r = Current.Resources;
-        static SolidColorBrush B(string hex) => (SolidColorBrush)new BrushConverter().ConvertFromString(hex)!;
-        r["Bg"] = B(dark ? "#14171C" : "#F6F7F9");
-        r["Panel"] = B(dark ? "#1F242C" : "#FFFFFF");
-        r["Fg"] = B(dark ? "#ECEFF4" : "#1B1F24");
-        r["Muted"] = B(dark ? "#98A2B3" : "#667085");
-        r["Accent"] = B(dark ? "#4C8DFF" : "#2563EB");
-        r["Border"] = B(dark ? "#3A424E" : "#D0D5DD");
+        // Recolour the existing brushes rather than replacing them, so every user of a brush updates whichever way it was bound.
+        void Set(string key, string light, string darkHex) =>
+            ((SolidColorBrush)r[key]).Color = (Color)ColorConverter.ConvertFromString(dark ? darkHex : light);
+        Set("Bg", "#F6F7F9", "#14171C");
+        Set("Panel", "#FFFFFF", "#1F242C");
+        Set("Fg", "#1B1F24", "#ECEFF4");
+        Set("Muted", "#667085", "#98A2B3");
+        Set("Accent", "#2563EB", "#4C8DFF");
+        Set("Border", "#D0D5DD", "#3A424E");
+        Set("Hover", "#E8EEFB", "#2B3340");
     }
 }
