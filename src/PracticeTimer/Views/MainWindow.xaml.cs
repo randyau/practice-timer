@@ -31,9 +31,11 @@ public partial class MainWindow : Window
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnSystemPreferenceChanged;
         Microsoft.Win32.SystemEvents.PowerModeChanged += OnPowerModeChanged;
         Application.Current.SessionEnding += OnSessionEnding;
+        // Not from Loaded: that event waits for the dispatcher to go idle, and the timer must not depend on it.
+        _vm.Start();
         Loaded += (_, _) =>
         {
-            _vm.Start();
+            App.Trace("window loaded");
             if (_vm.Settings.StartMinimized)
             {
                 // Hiding is only safe when the tray icon is there to bring the window back.

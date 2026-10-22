@@ -36,6 +36,8 @@ public partial class App : Application
                 Dispatcher.BeginInvoke(() => (MainWindow as Views.MainWindow)?.Restore());
         }) { IsBackground = true, Name = "show-signal" };
         waiter.Start();
+        try { File.Delete(TracePath); } catch (Exception) { }
+        Trace("startup");
         base.OnStartup(e);
         try
         {
@@ -77,6 +79,19 @@ public partial class App : Application
     }
 
     private static string LogPath => Path.Combine(ViewModels.MainViewModel.DataDir, "error.log");
+
+    private static readonly string TracePath = Path.Combine(ViewModels.MainViewModel.DataDir, "trace.log");
+
+    /// <summary>A short record of startup, rewritten each run, so a window that comes up dead can be diagnosed.</summary>
+    internal static void Trace(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(ViewModels.MainViewModel.DataDir);
+            File.AppendAllText(TracePath, $"{DateTime.Now:HH:mm:ss.fff} {message}\n");
+        }
+        catch (Exception) { /* diagnostics only */ }
+    }
 
     internal static void Log(Exception? ex)
     {

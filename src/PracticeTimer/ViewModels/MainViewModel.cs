@@ -59,7 +59,11 @@ public sealed class MainViewModel : ObservableBase, IDisposable
         _isAuto = Settings.Mode != "Manual";
         Instrument = Settings.LastInstrument ?? "";
         ApplyToRuntime(); // not saved: nothing has changed, and a file that failed to load must stay untouched
-        _timer.Tick += (_, _) => Refresh();
+        _timer.Tick += (_, _) =>
+        {
+            if (!_ticked) { _ticked = true; App.Trace("first tick"); }
+            Refresh();
+        };
         _watcher.Changed += () => Application.Current.Dispatcher.BeginInvoke(RefreshDevices);
         // NAudio raises this on the UI context already; MicCapture only raises it for the current capture, so no extra hop
         // that could let a stale event hit a newer capture.
@@ -162,10 +166,13 @@ public sealed class MainViewModel : ObservableBase, IDisposable
     {
         // The timer drives the meter and status, so it starts first: a failure finding microphones must not leave the window dead.
         _timer.Start();
+        App.Trace("timer started");
         TryRefreshDevices();
+        App.Trace($"devices listed: {Devices.Count}, pipeline: {_pipeline != null}, error: {_micError}");
     }
 
     private DateTime _nextDeviceRetry;
+    private bool _ticked;
 
     private void TryRefreshDevices()
     {
