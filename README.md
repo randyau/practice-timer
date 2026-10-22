@@ -30,7 +30,10 @@ SDK 10 is pinned in `global.json`; the app targets `net8.0-windows` and is cross
   four are saved. Auto-learned ones are tentative, session-only, and can't change a saved one.
 - Closing the window or logging off saves the session automatically. Reset asks first.
 - Microphone loss, sleep, or a mic that stops sending audio pauses the timer and leaves a warning until you act.
-- Files are written atomically; unreadable or newer-format files are set aside, never deleted. See
+- Steady room noise that starts mid-session (a fan) stops counting as playing after about 30 s; Calibrate in Settings
+  does it immediately.
+- Files are written atomically; corrupt or newer-format files are set aside, never deleted, and a file that is locked
+  at startup is never overwritten with defaults. See
   [SPEC.md](SPEC.md#implementation-notes) for details and known limits.
 - Only one copy runs at a time. Unexpected errors are logged to `%AppData%\PracticeTimer\error.log`.
 
