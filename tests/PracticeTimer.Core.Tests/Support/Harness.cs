@@ -19,7 +19,7 @@ public sealed class Harness
         Bank = bank ?? new FingerprintBank();
         var s = new DetectorSettings();
         tweak?.Invoke(s);
-        Detector = new LoudnessDetector(SignalGen.Rate, s, Bank);
+        Detector = new LoudnessDetector(s, Bank);
         Auto = new AutoLearner(Bank) { Enabled = autoLearn };
         Detector.CleanTick += t => { Auto.OnCleanTick(t); Session?.OnCleanTick(t); };
     }

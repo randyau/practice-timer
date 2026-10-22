@@ -15,7 +15,7 @@ public sealed class LoudnessDetector : IActivityDetector
     private Burst? _pendingClean;
     private bool _pendingMatched;
 
-    public LoudnessDetector(int sampleRate, DetectorSettings? settings = null, FingerprintBank? bank = null)
+    public LoudnessDetector(DetectorSettings? settings = null, FingerprintBank? bank = null)
     {
         _s = settings ?? new DetectorSettings();
         _bursts = new BurstTracker(_s.ShortBurstMax);

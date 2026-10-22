@@ -161,9 +161,7 @@ public class GateSettingsForTests
 
 public class BandSpectrumTests
 {
-    private readonly BandSpectrum _spec = new(SignalGen.Rate, 400);
-
-    private double[] Of(float[] a) => _spec.Compute(a.AsSpan(0, 400).ToArray());
+    private static double[] Of(float[] a) => BandSpectrum.BurstFingerprint(a.AsSpan(0, 400).ToArray(), SignalGen.Rate);
 
     [Fact]
     public void SameSignalDifferentLevelGivesSameShape() =>

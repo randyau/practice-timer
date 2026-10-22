@@ -166,6 +166,74 @@ public class LearnedFilterTests
     }
 }
 
+public class ReplayScenarioTests
+{
+    private static FingerprintBank Learn(params Func<float[]>[] sounds)
+    {
+        var bank = new FingerprintBank();
+        foreach (var sound in sounds)
+        {
+            var h = new Harness(bank);
+            h.StartGuided(TimeSpan.Zero);
+            h.Run(ClickTrain(80, 15, sound));
+        }
+        return bank;
+    }
+
+    [Fact]
+    public void TwoSavedMetronomesAreBothIgnored()
+    {
+        var bank = Learn(() => Click(-20, 2000), () => Beep(700, 60));
+        Assert.Equal(2, bank.Profiles.Count);
+        var h = new Harness(bank);
+        Assert.Equal(0, DetectorRun.ActiveSeconds(h.Run(ClickTrain(75, 10, () => Click(-20, 2000))), 3), 0.2);
+        Assert.Equal(0, DetectorRun.ActiveSeconds(h.Run(ClickTrain(110, 10, () => Beep(700, 60))), 3), 0.2);
+    }
+
+    [Fact]
+    public void MetronomeOffThenOnAtANewTempoStaysIgnored()
+    {
+        var bank = Learn(() => Click(-20));
+        var h = new Harness(bank);
+        var audio = Concat(ClickTrain(70, 8, () => Click(-20)), Silence(6), ClickTrain(132, 8, () => Click(-20)));
+        Assert.Equal(0, DetectorRun.ActiveSeconds(h.Run(audio)), 0.2);
+    }
+
+    [Fact]
+    public void AccentedBeatIsStillIgnored()
+    {
+        // Every fourth tick is louder and lower, like a metronome bell.
+        var bank = new FingerprintBank();
+        var learn = new Harness(bank);
+        learn.StartGuided(TimeSpan.Zero);
+        learn.Run(ClickTrain(t => 90, 20, i => i % 4 == 0 ? Click(-14, 1200) : Click(-20, 2000)));
+        Assert.Single(bank.Profiles);
+        var h = new Harness(bank);
+        var s = h.Run(ClickTrain(t => 100, 15, i => i % 4 == 0 ? Click(-14, 1200) : Click(-20, 2000)));
+        Assert.Equal(0, DetectorRun.ActiveSeconds(s, 2), 0.2);
+    }
+
+    [Fact]
+    public void MetronomeLearnedAtOneLevelIsIgnoredWhenMovedCloser()
+    {
+        var bank = Learn(() => Click(-26));
+        var h = new Harness(bank);
+        Assert.Equal(0, DetectorRun.ActiveSeconds(h.Run(ClickTrain(90, 12, () => Click(-14))), 2), 0.2);
+    }
+
+    [Fact]
+    public void AutoLearningNeverChangesASavedMetronome()
+    {
+        var bank = Learn(() => Click(-20, 2000));
+        var before = bank.Profiles.Single();
+        var h = new Harness(bank, autoLearn: true);
+        h.Run(ClickTrain(90, 20, () => Click(-20, 2100)));
+        var after = bank.Profiles.Single(p => p.Id == before.Id);
+        Assert.Equal(before.Clusters.Sum(c => c.Count), after.Clusters.Sum(c => c.Count));
+        Assert.Equal(before.Clusters[0].Spectrum, after.Clusters[0].Spectrum);
+    }
+}
+
 public class AutoLearnTests
 {
     [Fact]
@@ -178,6 +246,15 @@ public class AutoLearnTests
     }
 
     [Fact]
+    public void NeedsMoreTicksThanAGuidedLearn()
+    {
+        Assert.True(AutoLearner.Window > GuidedLearnSession.RequiredTicks);
+        var few = new Harness(autoLearn: true);
+        few.Run(ClickTrain(90, 6.5, () => Click(-20))); // about 9 ticks: enough for a guided learn, too few for a guess
+        Assert.Empty(few.Bank.Profiles);
+    }
+
+    [Fact]
     public void DoesNothingWhenDisabled()
     {
         var h = new Harness(autoLearn: false);
@@ -185,12 +262,38 @@ public class AutoLearnTests
         Assert.Empty(h.Bank.Profiles);
     }
 
-    [Fact]
-    public void DoesNotLearnSteadyPizzicato()
+    private static float[] Pluck(double seconds, double tauSeconds)
     {
+        var t = Tone(440, seconds, -20);
+        for (var i = 0; i < t.Length; i++) t[i] *= (float)Math.Exp(-i / (Rate * tauSeconds));
+        return t;
+    }
+
+    [Fact]
+    public void DoesNotLearnSteadyLongPlucks()
+    {
+        // 0.4 s notes ring past the short-burst limit, so they are playing, not ticks.
         var h = new Harness(autoLearn: true);
-        var pluck = () => { var t = Tone(440, 0.4, -20); for (var i = 0; i < t.Length; i++) t[i] *= (float)Math.Exp(-i / (Rate * 0.15)); return t; };
-        h.Run(ClickTrain(90, 15, pluck));
+        h.Run(ClickTrain(90, 15, () => Pluck(0.4, 0.15)));
+        Assert.Empty(h.Bank.Profiles);
+    }
+
+    [Fact]
+    public void ShortStaccatoPlucksAtASteadyTempoLookLikeAMetronome()
+    {
+        // The spec's known limit: a very regular, very short note is indistinguishable from a tick.
+        // Documented here so a change in this behaviour is noticed. The Metronome filter checkbox is the escape hatch.
+        var h = new Harness(autoLearn: true);
+        var s = h.Run(ClickTrain(90, 15, () => Pluck(0.08, 0.02)));
+        Assert.True(DetectorRun.ActiveSeconds(s, 6) < 1);
+    }
+
+    [Fact]
+    public void ShortPlucksAreActivityWhenTheFilterIsOff()
+    {
+        var h = new Harness(autoLearn: true, tweak: d => d.MetronomeFilterEnabled = false);
+        var s = h.Run(ClickTrain(90, 15, () => Pluck(0.08, 0.02)));
+        Assert.True(DetectorRun.ActiveSeconds(s, 3) > 8);
         Assert.Empty(h.Bank.Profiles);
     }
 

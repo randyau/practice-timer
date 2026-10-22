@@ -6,8 +6,7 @@ namespace PracticeTimer.Core.Tests.Metronome;
 
 public class TickClustererTests
 {
-    private static readonly BandSpectrum Spec = new(Rate, 400);
-    private static double[] Of(float[] a) => Spec.Compute(a.Concat(new float[400]).Take(400).ToArray());
+    private static double[] Of(float[] a) => BandSpectrum.BurstFingerprint(a, Rate);
     private static TickSample T(float[] a, double db = -20) => new(TimeSpan.Zero, Of(a), db, TimeSpan.FromMilliseconds(25));
 
     [Fact]
@@ -23,8 +22,7 @@ public class TickClustererTests
 
 public class FingerprintBankTests
 {
-    private static readonly BandSpectrum Spec = new(Rate, 400);
-    private static double[] Of(float[] a) => Spec.Compute(a.Concat(new float[400]).Take(400).ToArray());
+    private static double[] Of(float[] a) => BandSpectrum.BurstFingerprint(a, Rate);
 
     private static MetronomeProfile Profile(double freq, string name = "m", bool locked = true, double db = -20) => new()
     {

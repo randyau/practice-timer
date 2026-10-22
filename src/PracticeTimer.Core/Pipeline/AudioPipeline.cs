@@ -33,6 +33,7 @@ public sealed class AudioPipeline
     private double _peakSince = Dsp.MinDb;
     private FrameTag _tagSince = FrameTag.Quiet;
     private bool _framesSince;
+    private ActivitySample _last;
     private MeterSnapshot _lastTaken = MeterSnapshot.Empty;
 
     public AudioPipeline(int sampleRate, PracticeClock clock, DetectorSettings settings, FingerprintBank bank)
@@ -41,7 +42,7 @@ public sealed class AudioPipeline
         _bank = bank;
         _bank.BandHiHz = BandSpectrum.EffectiveHiHz(sampleRate);
         _slicer = new FrameSlicer(sampleRate, FrameLength);
-        _detector = new LoudnessDetector(sampleRate, settings, bank);
+        _detector = new LoudnessDetector(settings, bank);
         _auto = new AutoLearner(bank);
         _detector.CleanTick += t =>
         {
@@ -117,12 +118,14 @@ public sealed class AudioPipeline
                 if (_learn is { IsDone: true } && !_learnReported) { _learnReported = true; finished = _learn; }
                 if (!learning && _calibration == null) _clock.OnActivity(sample.Time, sample.Active);
                 Calibrate(sample.Dbfs);
-                _snapshot = new MeterSnapshot(sample.Dbfs, _detector.Floor.Floor, _detector.ThresholdDb, sample.Tag,
-                    _detector.Periodicity.CurrentBpm ?? _learn?.Bpm, _calibration != null, _bank.EnabledCount);
+                _last = sample;
                 _peakSince = Math.Max(_peakSince, sample.Dbfs);
                 if (Rank(sample.Tag) > Rank(_tagSince)) _tagSince = sample.Tag;
                 _framesSince = true;
             });
+            // One snapshot per chunk, not per 25 ms frame: only the latest is ever read.
+            if (_framesSince) _snapshot = new MeterSnapshot(_last.Dbfs, _detector.Floor.Floor, _detector.ThresholdDb, _last.Tag,
+                _detector.Periodicity.CurrentBpm ?? _learn?.Bpm, _calibration != null, _bank.EnabledCount);
         }
         if (finished != null) LearnFinished?.Invoke(finished);
     }

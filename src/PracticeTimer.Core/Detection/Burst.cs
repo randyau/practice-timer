@@ -54,7 +54,15 @@ public sealed class BurstTracker
         _open = false;
         _prevEnd = _lastLoudEnd;
         var dur = _lastLoudEnd - _onset;
-        return new Burst(_onset, dur, _peak, BandSpectrum.BurstFingerprint(_samples.SelectMany(f => f).ToArray(), _rate), _gapBefore, dur > _shortMax);
+        return new Burst(_onset, dur, _peak, BandSpectrum.BurstFingerprint(Joined(), _rate), _gapBefore, dur > _shortMax);
+    }
+
+    private float[] Joined()
+    {
+        var all = new float[_samples.Sum(f => f.Length)];
+        var at = 0;
+        foreach (var f in _samples) { f.CopyTo(all, at); at += f.Length; }
+        return all;
     }
 
     public void Reset()

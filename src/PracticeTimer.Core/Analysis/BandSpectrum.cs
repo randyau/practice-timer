@@ -4,28 +4,11 @@ using System.Numerics;
 namespace PracticeTimer.Core.Analysis;
 
 /// <summary>Level-invariant spectral fingerprint: log band energies, mean-subtracted, L2-normalised.</summary>
-public sealed class BandSpectrum
+public static class BandSpectrum
 {
     public const int Bands = 24;
     public const double DefaultLoHz = 100;
     public const double DefaultHiHz = 7500;
-    private readonly int _frameSamples;
-    private readonly int _fft;
-    private readonly double[] _window;
-    private readonly int[] _edges; // bin index per band edge
-    private readonly Complex[] _buf;
-
-    public BandSpectrum(int sampleRate, int frameSamples, double loHz = DefaultLoHz, double hiHz = DefaultHiHz)
-    {
-        _frameSamples = frameSamples;
-        _fft = 1;
-        while (_fft < frameSamples) _fft <<= 1;
-        _buf = new Complex[_fft];
-        _window = new double[frameSamples];
-        for (var i = 0; i < frameSamples; i++)
-            _window[i] = 0.5 - 0.5 * Math.Cos(2 * Math.PI * i / (frameSamples - 1));
-        _edges = Edges(_fft, sampleRate, loHz, hiHz);
-    }
 
     private static readonly ConcurrentDictionary<(int, int, double, double), int[]> EdgeCache = new();
 
@@ -64,22 +47,6 @@ public sealed class BandSpectrum
             for (var k = edges[b]; k < edges[b + 1] && k < fft / 2; k++)
                 v[b] += buf[k].Real * buf[k].Real + buf[k].Imaginary * buf[k].Imaginary;
         return FromEnergies(v);
-    }
-
-    public double[] Compute(float[] samples) => FromEnergies(Energies(samples));
-
-    /// <summary>Linear band energies. Sum these across a burst's frames before <see cref="FromEnergies"/>
-    /// so the fingerprint does not depend on where the click falls against the frame grid.</summary>
-    public double[] Energies(float[] samples)
-    {
-        for (var i = 0; i < _fft; i++)
-            _buf[i] = i < _frameSamples && i < samples.Length ? samples[i] * _window[i] : Complex.Zero;
-        Fft(_buf);
-        var v = new double[Bands];
-        for (var b = 0; b < Bands; b++)
-            for (var k = _edges[b]; k < _edges[b + 1] && k < _fft / 2; k++)
-                v[b] += _buf[k].Real * _buf[k].Real + _buf[k].Imaginary * _buf[k].Imaginary;
-        return v;
     }
 
     /// <summary>Log shape with bands clamped 35 dB below the loudest, so noise-only bands don't dominate the match.</summary>

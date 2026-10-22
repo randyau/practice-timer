@@ -11,7 +11,7 @@ public class LoudnessDetectorTests
     {
         var s = new DetectorSettings();
         tweak?.Invoke(s);
-        return new LoudnessDetector(Rate, s);
+        return new LoudnessDetector(s);
     }
 
     private static List<ActivitySample> Run(float[] audio, Action<DetectorSettings>? tweak = null) =>
